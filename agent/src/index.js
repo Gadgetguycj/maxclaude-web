@@ -1,0 +1,147 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+import { config, webOrigin } from './config.js';
+import { log } from './log.js';
+import { ensureWebSharing } from './zellijconfig.js';
+import { ensureWebServer, ensureToken, login, webStatus } from './zellijweb.js';
+import { Tunnel } from './tunnel.js';
+import { listSessions, nextStatusSequence, runAutomaticHibernate } from './sessions.js';
+import { UsageMonitor } from './usage.js';
+
+function readSecret() {
+  let raw;
+  try {
+    raw = fs.readFileSync(config.secretFile, 'utf8');
+  } catch (e) {
+    log.error('tunnel secret is unreadable, refusing to start', { file: config.secretFile, error: String(e.message) });
+    process.exit(1);
+  }
+  const secret = raw.replace(/\s+$/, '');
+  if (!secret) {
+    log.error('tunnel secret file is empty, refusing to start', { file: config.secretFile });
+    process.exit(1);
+  }
+  const mode = fs.statSync(config.secretFile).mode & 0o777;
+  if (mode & 0o077) {
+    log.warn('tunnel secret is group or world readable', { file: config.secretFile, mode: mode.toString(8) });
+  }
+  return secret;
+}
+
+async function main() {
+  log.info('mcw-agent starting', { version: config.version, hub: config.hubUrl, zellijWeb: webOrigin });
+  const secret = readSecret();
+
+  const sharing = await ensureWebSharing();
+  log.info('zellij web_sharing', sharing);
+
+  await ensureWebServer();
+  await ensureToken();
+  await login();
+  log.info('zellij web ready', { origin: webOrigin });
+
+  const tunnel = new Tunnel(secret);
+  // Plan usage goes to the hub after every refresh and again on every new tunnel.
+  const usage = new UsageMonitor({ publish: (snapshot) => tunnel.sendEvent('usage', snapshot) });
+  tunnel.onReady = () => {
+    if (usage.updatedAt !== null) tunnel.sendEvent('usage', usage.snapshot());
+  };
+  tunnel.start();
+  usage.start();
+
+  let priorStatus = new Map();
+  let lastStatusHeartbeatAt = 0;
+  let statusPolling = false;
+  const statusWatch = setInterval(async () => {
+    if (statusPolling) return;
+    statusPolling = true;
+    try {
+      const { sessions, statusSequence, observedAt, sourceAgeMs } = await listSessions();
+      const current = new Map(sessions.map((session) => [session.name, {
+        state: session.activity,
+        updatedAt: session.activityUpdatedAt,
+        lastResponseAt: session.lastResponseAt,
+        lastActivityAt: session.lastActivityAt,
+        descendantTaskCount: session.descendantTaskCount,
+        viewerCount: session.viewers,
+        resumable: session.resumable,
+        operatorActive: session.operatorActive,
+      }]));
+      const now = Date.now();
+      const scanAgeMs = Math.max(0, now - observedAt);
+      if (scanAgeMs > config.statusSourceLeaseMs || sourceAgeMs > config.statusSourceLeaseMs) {
+        throw new Error(`session inventory exceeded its ${config.statusSourceLeaseMs}ms source lease`);
+      }
+      const changed = [...current].some(([name, status]) => JSON.stringify(priorStatus.get(name)) !== JSON.stringify(status))
+        || [...priorStatus].some(([name]) => !current.has(name));
+      // A light that changes, busy to idle for example, usually means plan usage moved.
+      if (priorStatus.size && [...current].some(([name, status]) => priorStatus.get(name)?.state !== status.state)) {
+        usage.request('session status changed');
+      }
+      if (changed || now - lastStatusHeartbeatAt >= 2000) {
+        tunnel.sendEvent('sessions.status', {
+          sessions: Object.fromEntries(current), observedAt,
+          sourceAgeMs, publishedAt: now, sourceLeaseMs: config.statusSourceLeaseMs, statusSequence
+        });
+        lastStatusHeartbeatAt = now;
+      }
+      priorStatus = current;
+    } catch (err) {
+      log.warn('session status poll failed', { error: String(err.message) });
+      const unknown = Object.fromEntries([...priorStatus].map(([name, status]) => [name, { ...status, state: 'unknown' }]));
+      tunnel.sendEvent('sessions.status', { sessions: unknown, observedAt: Date.now(), statusSequence: nextStatusSequence() });
+      priorStatus = new Map(Object.entries(unknown));
+      lastStatusHeartbeatAt = Date.now();
+    } finally {
+      statusPolling = false;
+    }
+  }, config.statusWatchMs);
+
+  const watch = setInterval(async () => {
+    try {
+      const st = await webStatus();
+      if (st.online) return;
+      log.warn('zellij web went offline, restarting it');
+      await ensureWebServer();
+      await login({ force: true });
+      log.info('zellij web restarted');
+    } catch (err) {
+      log.error('zellij web could not be restarted', { error: String(err.message) });
+      tunnel.sendJson({
+        t: 'event',
+        event: 'agent.degraded',
+        data: { reason: 'zellij web is down', detail: { error: String(err.message) } },
+      });
+    }
+  }, config.webWatchMs);
+
+  let hibernatePolling = false;
+  const hibernateWatch = setInterval(async () => {
+    if (hibernatePolling || !config.autoHibernateHours) return;
+    hibernatePolling = true;
+    try {
+      await runAutomaticHibernate();
+    } catch (err) {
+      log.warn('automatic hibernation scan failed', { error: String(err.message) });
+    } finally {
+      hibernatePolling = false;
+    }
+  }, config.autoHibernateWatchMs);
+
+  const shutdown = (sig) => {
+    log.info('shutting down', { signal: sig });
+    clearInterval(watch);
+    clearInterval(statusWatch);
+    clearInterval(hibernateWatch);
+    usage.stop();
+    tunnel.stop();
+    setTimeout(() => process.exit(0), 500).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
+
+main().catch((err) => {
+  log.error('mcw-agent failed to start', { error: String(err.message), detail: err.detail });
+  process.exit(1);
+});

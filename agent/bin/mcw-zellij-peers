@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""Observe current Unix socket owners without connecting to the sockets."""
+import argparse
+import errno
+import json
+import os
+import pathlib
+import random
+import socket
+import stat
+import struct
+import subprocess
+import sys
+import time
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--dir", action="append", default=[])
+parser.add_argument("--zellij")
+parser.add_argument("--peers-only", action="store_true")
+# Seconds the whole pane inventory may take. The agent kills this helper a few
+# seconds later, so no session is asked once a reply could arrive after it.
+parser.add_argument("--budget", type=float, default=9.0)
+args = parser.parse_args()
+started = time.monotonic()
+if not args.peers_only and not args.zellij:
+    parser.error("--zellij is required for pane inventory")
+
+# Concurrent clients trigger a client id race in the zellij server that drops
+# replies from live sessions, so sessions are queried one at a time and a bad
+# reply is retried. The agent awaits this helper, so its run time delays a
+# status light but never blocks the agent. See docs/zellij-client-id-race.md.
+RETRY_DELAYS = (0.25, 0.5, 1)
+QUERY_TIMEOUT = 3
+
+# A connect to a zellij socket makes the server log two "unknown message"
+# errors, and a zellij server that is still starting can panic when a client
+# disconnects early. So the owner of a socket is read from the kernel instead:
+# the sock_diag table that ss -xl reads names the socket inode listening on
+# each socket file, and /proc names the processes holding that socket inode.
+NETLINK_SOCK_DIAG = 4
+SOCK_DIAG_BY_FAMILY = 20
+NLM_F_REQUEST = 0x1
+NLM_F_DUMP = 0x300
+NLMSG_ERROR = 2
+NLMSG_DONE = 3
+TCP_LISTEN = 10
+UDIAG_SHOW_VFS = 0x2
+UNIX_DIAG_VFS = 1
+NLMSG_HEADER = struct.Struct("=IHHII")
+
+class Gone(Exception):
+    """The socket file or its listener is gone, so the session has ended."""
+
+class Unknown(Exception):
+    """The session is live, but its panes could not be read in time."""
+
+def listening_sockets():
+    """Map each listening Unix socket file, by device and inode, to its socket inode."""
+    request = struct.pack("=BBxxIIIII", socket.AF_UNIX, 0, 1 << TCP_LISTEN, 0, UDIAG_SHOW_VFS, 0, 0)
+    header = NLMSG_HEADER.pack(NLMSG_HEADER.size + len(request), SOCK_DIAG_BY_FAMILY, NLM_F_REQUEST | NLM_F_DUMP, 1, 0)
+    found = {}
+    with socket.socket(socket.AF_NETLINK, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC, NETLINK_SOCK_DIAG) as diag:
+        diag.sendto(header + request, (0, 0))
+        while True:
+            data = diag.recv(1 << 20)
+            offset = 0
+            while offset < len(data):
+                length, kind = NLMSG_HEADER.unpack_from(data, offset)[:2]
+                if kind == NLMSG_DONE:
+                    return found
+                if kind == NLMSG_ERROR:
+                    code = -struct.unpack_from("=i", data, offset + NLMSG_HEADER.size)[0]
+                    raise OSError(code, f"sock_diag dump failed: {os.strerror(code)}")
+                if length < NLMSG_HEADER.size + 16:
+                    raise RuntimeError("sock_diag returned a short message")
+                # struct unix_diag_msg is 16 bytes, and its attributes follow.
+                inode = struct.unpack_from("=I", data, offset + NLMSG_HEADER.size + 4)[0]
+                attribute = offset + NLMSG_HEADER.size + 16
+                while attribute + 4 <= offset + length:
+                    size, kind = struct.unpack_from("=HH", data, attribute)
+                    if size < 4:
+                        break
+                    if kind == UNIX_DIAG_VFS:
+                        file_inode, device = struct.unpack_from("=II", data, attribute + 4)
+                        # The kernel device number keeps the major above bit 20.
+                        found[(device >> 20, device & 0xFFFFF, file_inode)] = inode
+                    attribute += (size + 3) & ~3
+                offset += (length + 3) & ~3
+
+def listener(path):
+    """Return the socket inode listening on path. Raise Gone if there is none."""
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        raise Gone(path.name)
+    # The kernel reports the file inode as 32 bits.
+    key = (os.major(info.st_dev), os.minor(info.st_dev), info.st_ino & 0xFFFFFFFF)
+    inode = listening_sockets().get(key)
+    if inode is None:
+        raise Gone(path.name)
+    return inode
+
+def sockets_of(pid):
+    """Return the socket inodes a process holds open. An exited process holds none."""
+    inodes = set()
+    try:
+        fds = os.listdir(f"/proc/{pid}/fd")
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return inodes
+    for fd in fds:
+        try:
+            target = os.readlink(f"/proc/{pid}/fd/{fd}")
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        if target.startswith("socket:["):
+            inodes.add(int(target[8:-1]))
+    return inodes
+
+# Socket inode to holder pids from the last scan of every process. A cached
+# holder is checked again before use, and a miss scans every process again.
+held = {}
+
+def holders(inode):
+    """Return the pids of the processes holding a socket inode open."""
+    pids = {pid for pid in held.get(inode, ()) if inode in sockets_of(pid)}
+    if not pids:
+        held.clear()
+        for name in os.listdir("/proc"):
+            if name.isdigit():
+                for socket_inode in sockets_of(int(name)):
+                    held.setdefault(socket_inode, set()).add(int(name))
+        pids = held.get(inode, set())
+    return pids
+
+def process(pid):
+    """Return the parent pid, effective uid and gid, and start ticks of a process."""
+    status = pathlib.Path(f"/proc/{pid}/status").read_text()
+    ids = {line[:3]: int(line.split()[2]) for line in status.splitlines() if line.startswith(("Uid:", "Gid:"))}
+    value = pathlib.Path(f"/proc/{pid}/stat").read_text()
+    fields = value[value.rfind(")") + 2:].split()
+    return int(fields[1]), ids["Uid"], ids["Gid"], int(fields[19])
+
+def peer(path):
+    """Return the pid, uid, gid and start ticks of the process listening on path."""
+    inode = listener(path)
+    owners = {}
+    for pid in holders(inode):
+        try:
+            owners[pid] = process(pid)
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+    # A child the server forks holds the socket until it calls exec.
+    roots = [pid for pid, (ppid, *_) in owners.items() if ppid not in owners]
+    if len(roots) == 1:
+        _, uid, gid, ticks = owners[roots[0]]
+        return roots[0], uid, gid, ticks
+    # The listener closes when its last holder exits between these reads.
+    listener(path)
+    raise RuntimeError(f"{len(roots)} processes own the socket for {path.name}")
+
+def pane_inventory(path, before):
+    """Return the session's panes. Raise Gone when its socket is gone, Unknown when it is slow."""
+    env = os.environ.copy()
+    for key in ("ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_PANE_ID"):
+        env.pop(key, None)
+    reply = "not asked"
+    for delay in (0, *RETRY_DELAYS):
+        if time.monotonic() - started + delay + QUERY_TIMEOUT > args.budget:
+            raise Unknown(f"no time left in the {args.budget:g}s budget for {path.name}, last reply {reply}")
+        time.sleep(delay)
+        # Every list-panes request makes the server run ps over the
+        # whole process table, so the agent caches this inventory.
+        # The id, is_plugin, and exited fields need no extra flags.
+        try:
+            result = subprocess.run([args.zellij, "-s", path.name, "action", "list-panes", "--json"],
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=QUERY_TIMEOUT, env=env)
+        except subprocess.TimeoutExpired:
+            # A session that closes mid-query can leave the query hanging.
+            if peer(path) != before:
+                raise RuntimeError(f"socket owner changed for {path.name}")
+            # zellij asks every session server before it acts, so one slow
+            # server delays the queries for all of them. This session is
+            # still live, so it is reported as unknown, never as absent.
+            raise Unknown(f"pane inventory timed out for {path.name}")
+        reply = f"exit {result.returncode}: {result.stdout[:100]!r}, stderr={result.stderr[:100]!r}"
+        if not result.returncode:
+            try:
+                panes = json.loads(result.stdout)
+                if isinstance(panes, list):
+                    return panes
+            except json.JSONDecodeError:
+                pass
+        # A bad reply can come from a session that just closed or from a live
+        # session whose reply zellij dropped. Only the socket tells them apart.
+        if peer(path) != before:
+            raise RuntimeError(f"socket owner changed for {path.name}")
+        print(f"retrying pane inventory for {path.name}: {reply}", file=sys.stderr)
+    raise Unknown(f"invalid pane inventory for {path.name} after {len(RETRY_DELAYS) + 1} attempts: {reply}")
+
+def observe(path):
+    try:
+        before = peer(path)
+        if before[1] != os.geteuid():
+            return None
+        row = dict(session=path.name, pid=before[0], uid=before[1], gid=before[2], startTicks=before[3])
+        if not args.peers_only:
+            try:
+                panes = pane_inventory(path, before)
+                row["panes"] = [str(pane["id"]) for pane in panes if not pane.get("is_plugin") and not pane.get("exited")]
+            except Unknown as reason:
+                print(f"{reason}; its panes are unknown", file=sys.stderr)
+                row["panes"] = None
+                row["unknown"] = str(reason)
+        if peer(path) != before:
+            raise RuntimeError(f"socket owner changed for {path.name}")
+        return row
+    except Gone:
+        return None
+
+try:
+    paths = []
+    for directory in set(args.dir):
+        for path in pathlib.Path(directory).iterdir():
+            # A session can close between directory enumeration and lstat.
+            # That is a normal exited-process race. Permission failures still
+            # invalidate this inventory rather than being treated as absence.
+            try:
+                mode = path.lstat().st_mode
+            except OSError as error:
+                if error.errno in (errno.ENOENT, errno.ESRCH):
+                    continue
+                raise
+            if stat.S_ISSOCK(mode):
+                paths.append(path)
+    # A session the budget cuts off this run is asked early in a later one.
+    random.shuffle(paths)
+    rows = sorted((row for row in map(observe, paths) if row is not None), key=lambda row: row["session"])
+    print(json.dumps(rows))
+except Exception as error:
+    print(str(error), file=sys.stderr)
+    sys.exit(1)

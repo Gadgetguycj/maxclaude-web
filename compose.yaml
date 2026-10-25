@@ -1,0 +1,16 @@
+services:
+  hub:
+    build: ./web
+    image: maxclaude-web:local
+    ports:
+      - "127.0.0.1:${HUB_PORT:-8080}:8080"
+    environment:
+      OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:?set OPERATOR_PASSWORD}
+      AGENT_SECRET: ${AGENT_SECRET:?set AGENT_SECRET}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      DATA_DIR: /data
+    volumes:
+      - hub-data:/data
+    restart: unless-stopped
+volumes:
+  hub-data:

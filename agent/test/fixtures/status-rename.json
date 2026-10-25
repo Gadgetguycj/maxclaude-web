@@ -1,0 +1,9 @@
+[
+  {"name":"verified rename keeps the same controller and Claude owner"},
+  {"name":"old name reuse has a different controller"},
+  {"name":"chained rename retains the original controller"},
+  {"name":"controller pid reuse has different start ticks"},
+  {"name":"new Claude under the retained controller uses the new name"},
+  {"name":"background and tool owners remain isolated when the old name is reused"},
+  {"name":"inactive pane or stopped controller has no activity"}
+]

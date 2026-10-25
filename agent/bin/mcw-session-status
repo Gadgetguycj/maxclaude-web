@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in busy|idle|interrupt) ;; *) exit 0 ;; esac
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$script_dir/mcw-status-events.py" "$@"

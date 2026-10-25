@@ -1,0 +1,25 @@
+{
+  "name": "mcw-agent",
+  "version": "1.13.0",
+  "private": true,
+  "description": "session-host side of maxclaude-web: outbound tunnel, zellij web proxy, maxclaude session control",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test:files": "node test/files.mjs",
+    "test:status": "node test/status.mjs",
+    "test:status-rename": "node test/status-rename.mjs",
+    "test:zellij-peers": "node test/zellij-peers.mjs",
+    "test:status-reliable": "node test/status-reliable.mjs",
+    "test:service-template": "node test/service-template.mjs",
+    "test:session-lifecycle": "node test/session-lifecycle.mjs",
+    "test:integration": "node test/integration.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

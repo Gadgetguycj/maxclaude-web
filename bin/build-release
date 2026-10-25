@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# != 3 ]]; then
+  echo 'usage: build-release COMMIT IMAGE OUTPUT_DIRECTORY' >&2
+  exit 2
+fi
+repo=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+revision=$(git -C "$repo" rev-parse --verify "$1^{commit}")
+image=$2
+output=$3
+mkdir -p "$output"
+build_dir=$(mktemp -d /tmp/mcw-release-XXXXXX)
+trap 'rm -r "$build_dir"' EXIT
+git -C "$repo" archive "$revision" | tar -x -C "$build_dir"
+printf '%s\n' "$revision" > "$output/source-commit.txt"
+(cd "$build_dir" && find agent/src agent/bin agent/test web/src web/public docs -type f -print0 | sort -z | xargs -0 sha256sum) > "$output/source-sha256.txt"
+docker build --build-arg "SOURCE_REVISION=$revision" -t "$image" "$build_dir/web"
+actual=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")
+[[ "$actual" == "$revision" ]] || { echo 'image revision does not match committed archive' >&2; exit 1; }
+docker image inspect "$image" > "$output/image-inspect.json"
+docker save "$image" -o "$output/image.tar"
+sha256sum "$output/image.tar" > "$output/image-tar-sha256.txt"

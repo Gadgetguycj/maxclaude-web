@@ -1,0 +1,18 @@
+[Unit]
+Description=maxclaude-web agent (outbound tunnel, zellij web proxy)
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/maxclaude-web/agent
+ExecStart=/usr/bin/env node %h/.local/share/maxclaude-web/agent/src/index.js
+Restart=always
+RestartSec=5
+KillMode=control-group
+EnvironmentFile=-%h/.config/maxclaude-web/agent.env
+Environment=NODE_ENV=production
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
