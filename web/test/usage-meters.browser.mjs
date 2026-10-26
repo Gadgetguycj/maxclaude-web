@@ -105,8 +105,10 @@ try {
     assert.deepEqual(view.meters.map((meter) => meter.pct), ['21%', '39%', '3%', '0%']);
     assert.ok(view.meters.every((meter) => meter.reset.startsWith('resets ')), 'reset times are inline without hover');
     assert.deepEqual(view.meters.map((meter) => Math.round(meter.fillRatio * 100)), [21, 39, 3, 0]);
-    assert.match(view.meters[0].title, /^Claude weekly, all models: 21% used, resets \w{3} \d\d:\d\d(?: [AP]M)?, in 6d 6h$/);
-    assert.match(view.meters[1].title, /^Claude 5-hour: 39% used, resets \d\d:\d\d(?: [AP]M)?, in 3h 0m$/);
+    assert.deepEqual(view.meters.map((meter) => meter.reset), ['resets in 6d', 'resets in 3h', 'resets in 6d', 'resets in 6d']);
+    assert.ok(view.meters.every((meter) => Math.abs(meter.top - view.meters[0].top) < 1), `${label}: the meters share one row`);
+    assert.equal(view.meters[0].title, 'Claude weekly, all models: 21% used, resets in 6d');
+    assert.equal(view.meters[1].title, 'Claude 5-hour: 39% used, resets in 3h');
     pass(`${label} ${width}px: four meters with inline resets (name ${Math.round(view.nameWidth)}px wide), bars and percents match, tooltips name the reset`);
     if (SHOTS) {
       await page.screenshot({ path: `${SHOTS}/usage-${width}.png` });

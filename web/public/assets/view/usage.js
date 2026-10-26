@@ -4,8 +4,6 @@
 // that lists every window with its reset time.
 import { html } from './html.js';
 
-const DAY = 24 * 60 * 60 * 1000;
-
 export function meterPercent(meter) {
   if (!meter || !meter.available || typeof meter.percent !== 'number' || !isFinite(meter.percent)) return null;
   return Math.max(0, Math.min(100, meter.percent));
@@ -24,22 +22,20 @@ export function percentText(meter) {
   return percent === null ? 'unavailable' : Math.round(percent) + '%';
 }
 
-function untilText(ms, now) {
-  const minutes = Math.max(0, Math.round((ms - now) / 60000));
+// "37h". Minutes under an hour, hours under two days, whole days after that. Empty without a reset time.
+export function untilText(meter, now = Date.now()) {
+  const at = Number(meter?.resetsAt);
+  if (!isFinite(at) || at <= 0) return '';
+  const minutes = Math.max(0, Math.round((at - now) / 60000));
   if (minutes < 60) return minutes + 'm';
   const hours = Math.floor(minutes / 60);
-  if (hours < 48) return hours + 'h ' + (minutes % 60) + 'm';
-  return Math.floor(hours / 24) + 'd ' + (hours % 24) + 'h';
+  if (hours < 48) return hours + 'h';
+  return Math.floor(hours / 24) + 'd';
 }
 
-// "resets Thu 09:59, in 6d 13h". Within a day the weekday is left out.
 export function resetText(meter, now = Date.now()) {
-  const at = Number(meter?.resetsAt);
-  if (!isFinite(at) || at <= 0) return 'reset time unknown';
-  const when = new Date(at);
-  const time = when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const day = at - now < DAY ? '' : when.toLocaleDateString([], { weekday: 'short' }) + ' ';
-  return 'resets ' + day + time + ', in ' + untilText(at, now);
+  const until = untilText(meter, now);
+  return until ? 'resets in ' + until : 'reset time unknown';
 }
 
 export function meterDetail(meter, now = Date.now()) {
@@ -61,10 +57,13 @@ export function usageSummary(usage) {
 function Meter({ meter, now }) {
   const percent = meterPercent(meter);
   const cls = 'meter ' + meterLevel(meter) + (meter.stale ? ' stale' : '');
+  const until = untilText(meter, now);
+  // Phones show only the number after the percent; the words hide there.
+  const words = (percent === null && until ? 'last known ' : '') + (until ? 'resets in ' : 'reset time ');
   return html`<span class=${cls} data-key=${meter.key} title=${meterTooltip(meter, now)}>
     <span class="meter-label">${meter.label}</span>
     <span class="meter-bar" aria-hidden="true"><span class="meter-fill" style=${'width:' + (percent === null ? 0 : percent) + '%'}></span></span>
-    <span class="meter-values"><span class="meter-pct">${percentText(meter)}</span> <span class="meter-reset">${meterPercent(meter) === null && Number(meter.resetsAt) > 0 ? "last known " : ""}${resetText(meter, now)}</span></span>
+    <span class="meter-values"><span class="meter-pct">${percentText(meter)}</span> <span class="meter-reset"><span class="meter-reset-words">${words}</span>${until || 'unknown'}</span></span>
   </span>`;
 }
 
