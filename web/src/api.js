@@ -142,6 +142,8 @@ function fail(res, err) {
 }
 
 export function createApi(tunnel) {
+  getDb().prepare("UPDATE session_creations SET state = 'failed', error = 'Creation interrupted when the hub stopped. Retry to check the session.' WHERE state = 'creating'").run();
+  const creating = new Set();
   const router = express.Router();
   router.use(express.json({ limit: '256kb' }));
 
@@ -320,6 +322,7 @@ export function createApi(tunnel) {
       },
       sessions_degraded: degradedState(),
       tree: listNodes().map(publicNode),
+      creations: getDb().prepare('SELECT * FROM session_creations').all(),
       sessions,
       session_status: status.sessionStatus,
       session_status_meta: status.sessionStatusMeta,
@@ -345,6 +348,8 @@ export function createApi(tunnel) {
   router.post('/sessions/:name/open', async (req, res) => {
     try {
       const name = cleanSessionName(req.params.name);
+      const pending = getDb().prepare('SELECT c.state FROM session_creations c JOIN nodes n ON n.id = c.node_id WHERE n.session_name = ?').get(name);
+      if (pending) throw new TreeError(409, 'session_' + pending.state, 'Session creation is ' + pending.state);
       let sessions = await sessionsOrLastGood();
       if (sessions === null) throw new TunnelError('agent_disconnected', 'the agent is not connected');
       const target = sessions.find((session) => session.name === name && !session.exited);
@@ -577,34 +582,46 @@ export function createApi(tunnel) {
       const workdir = cleanWorkdir(req.body?.workdir);
       const resumeSid = cleanResumeSid(req.body?.resume_sid);
 
-      const result = await tunnel.rpc('sessions.create', {
-        name,
-        panes,
-        workdir,
-        resumeSid,
-        org: null,
-        settings: null,
-        appendPrompt: null,
-        extraArgs: null
-      });
-      log('tree', 'session created', { name, panes, workdir, resumeSid, unit: result?.unit });
-
+      if (!tunnel.connected) throw new TunnelError('agent_disconnected', 'the agent is not connected');
       const existing = findSessionLeaf(name);
-      if (existing) {
-        getDb()
-          .prepare('UPDATE nodes SET panes = ?, workdir = ?, resume_sid = ? WHERE id = ?')
-          .run(panes, workdir, resumeSid, existing.id);
-        return res.json({ node: publicNode(getNode(existing.id)) });
+      const prior = existing && getDb().prepare('SELECT state FROM session_creations WHERE node_id = ?').get(existing.id);
+      if (!prior && lastGoodSessions?.some((session) => session.name === name && !session.exited && !session.sleeping)) {
+        throw new TreeError(409, 'conflict', `session ${name} is already running`);
       }
-
-      const node = createSessionLeaf({
-        sessionName: name,
-        panes,
-        workdir,
-        resumeSid,
-        parentId: req.body?.parent_id ?? null
-      });
-      return res.json({ node: publicNode(node) });
+      if (creating.has(name)) return res.status(202).json({ node: publicNode(existing), state: 'creating' });
+      const node = existing || createSessionLeaf({ sessionName: name, panes, workdir, resumeSid,
+        parentId: req.body?.parent_id ?? null });
+      getDb().prepare('UPDATE nodes SET panes = ?, workdir = ?, resume_sid = ? WHERE id = ?')
+        .run(panes, workdir, resumeSid, node.id);
+      getDb().prepare(`INSERT INTO session_creations (node_id, state, error, started_at) VALUES (?, 'creating', NULL, ?)
+        ON CONFLICT(node_id) DO UPDATE SET state = 'creating', error = NULL, started_at = excluded.started_at`).run(node.id, Date.now());
+      creating.add(name);
+      res.status(202).json({ node: publicNode(getNode(node.id)), state: 'creating' });
+      broadcast('creations', {});
+      // The response acknowledges the job. The agent's real create result decides readiness.
+      void (async () => {
+        try {
+          await tunnel.rpc('sessions.create', { name, panes, workdir, resumeSid,
+            org: null, settings: null, appendPrompt: null, extraArgs: null }, 120000);
+          getDb().prepare('DELETE FROM session_creations WHERE node_id = ?').run(node.id);
+          sessionsInFlight = null;
+        } catch (err) {
+          // A retry after an interrupted acknowledgement can discover the real session already running.
+          let ready = false;
+          if (err.code === 'conflict') {
+            try {
+              const result = await tunnel.rpc('sessions.listFast');
+              ready = result.sessions?.some((session) => session.name === name && !session.exited && !session.sleeping);
+            } catch { /* leave the failure visible */ }
+          }
+          if (ready) getDb().prepare('DELETE FROM session_creations WHERE node_id = ?').run(node.id);
+          else getDb().prepare("UPDATE session_creations SET state = 'failed', error = ? WHERE node_id = ?").run(err.message, node.id);
+          sessionsInFlight = null;
+        } finally {
+          creating.delete(name);
+          broadcast('creations', {});
+        }
+      })();
     } catch (err) {
       return fail(res, err);
     }

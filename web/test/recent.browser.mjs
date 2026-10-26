@@ -138,7 +138,7 @@ try {
   }
 
   await page.locator('select.recent-limit').selectOption('3');
-  await page.waitForFunction(() => document.querySelectorAll('#tree .row[data-kind="recent"]').length === 3);
+  await page.waitForFunction(() => document.querySelectorAll('#tree .row[data-kind="recent"]').length === 4);
   assert.equal(await page.locator('select.recent-limit').inputValue(), '3');
 
   const nearMinute = Date.now() - 59500;

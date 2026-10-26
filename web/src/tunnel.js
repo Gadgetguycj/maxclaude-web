@@ -83,7 +83,7 @@ function normalizeSessionStatus(data) {
 }
 
 // A usage snapshot as the page may show it: known fields only, numbers or null.
-export function normalizeUsage(data) {
+export function normalizeUsage(data, previous = null) {
   if (!data || !Array.isArray(data.meters)) return null;
   const number = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
   const text = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
@@ -96,7 +96,7 @@ export function normalizeUsage(data) {
       label: text(meter.label, 24) || key,
       title: text(meter.title, 80) || key,
       percent: number(meter.percent),
-      resetsAt: number(meter.resetsAt),
+      resetsAt: number(meter.resetsAt) || previous?.meters?.find((old) => old.key === key)?.resetsAt || null,
       available: meter.available === true,
       stale: meter.stale === true,
       fetchedAt: number(meter.fetchedAt),
@@ -467,7 +467,7 @@ export class Tunnel extends EventEmitter {
         } else if (msg.event === 'sessions.status') {
           if (!this.setSessionStatus(msg.data)) return;
         } else if (msg.event === 'usage') {
-          const usage = normalizeUsage(msg.data);
+          const usage = normalizeUsage(msg.data, this.usage);
           if (!usage) return;
           this.usage = usage;
         }

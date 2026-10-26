@@ -48,7 +48,7 @@ function dragClass(drag, key) {
 
 function SessionRow({ item, ctx }) {
   const cls = 'row ' + item.kind + (item.selected ? ' selected' : '') + dragClass(ctx.drag, item.key);
-  return html`<a class=${cls} role="treeitem" tabindex="0" href=${item.href} draggable=${false}
+  return html`<a class=${cls} role="treeitem" tabindex="0" href=${item.pending ? null : item.href} data-pending=${item.pending ? "true" : null} draggable=${false}
       aria-level=${item.level} aria-setsize=${item.setsize} aria-posinset=${item.posinset}
       aria-label=${item.ariaLabel} aria-current=${item.selected ? 'page' : null}
       data-kind=${item.kind} data-name=${item.name} data-id=${item.id} data-key=${item.key}
@@ -59,6 +59,8 @@ function SessionRow({ item, ctx }) {
     <span class="name" title=${item.title}>${item.label}</span>
     ${item.create ? html`<button class="act wide" type="button" disabled=${!ctx.canMutate}
         aria-label=${'Create session ' + item.name} data-act="create">Create</button>` : null}
+    ${item.pending ? html`<span class="creation-state" title=${item.error || item.stateText}>${item.error ? 'Failed: ' + item.error : item.stateText}</span>` : null}
+    ${item.retry ? html`<button class="act wide" type="button" disabled=${!ctx.canMutate} data-act="retry">Retry</button>` : null}
     <span class="age" title=${item.ageTitle}>${item.age}</span>
     <button class="act" type="button" aria-label=${'Actions for ' + item.label} data-act="menu">…</button>
   </a>`;
@@ -66,7 +68,7 @@ function SessionRow({ item, ctx }) {
 
 function Group({ item, ctx }) {
   if (!item.open || !item.children.length) return null;
-  return html`<div class="tree-group" role="group" id=${groupId(item.key)} aria-label=${item.label}>
+  return html`<div class=${"tree-group" + (item.extra === "recent-limit" ? " recent-scroll" : "")} style=${item.extra === "recent-limit" ? { maxHeight: (ctx.geo.row * ctx.recentLimit) + "px" } : null} role="group" id=${groupId(item.key)} aria-label=${item.label}>
     ${item.children.map((child) => html`<${TreeNode} key=${child.key} item=${child} ctx=${ctx} />`)}
   </div>`;
 }
@@ -95,7 +97,7 @@ function FolderRow({ item, ctx }) {
 const LIMITS = [[3, '3'], [5, '5'], [10, '10'], [15, '15'], [0, 'Off']];
 
 function RecentLimit({ ctx }) {
-  return html`<span class="recent-controls"><span>Show</span>
+  return html`<span class="recent-controls"><span>Rows</span>
     <select class="recent-limit" aria-label="Recent sessions count" value=${String(ctx.recentLimit)}
         onClick=${(ev) => ev.stopPropagation()} onChange=${(ev) => ctx.onRecentLimit(Number(ev.currentTarget.value), ev.currentTarget)}>
       ${LIMITS.map(([value, label]) => html`<option key=${value} value=${String(value)}>${label}</option>`)}

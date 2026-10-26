@@ -662,7 +662,8 @@ check('creating a session calls the agent and files a leaf', async () => {
     cookie,
     body: { name: 'built', panes: 2, workdir: '/home/user/projects', resume_sid: null, parent_id: nested.json.node.id }
   });
-  assert.equal(created.status, 200);
+  assert.equal(created.status, 202);
+  await waitFor(() => live.sessions.some((row) => row.name === 'built'), 5000, 'created session');
   assert.equal(created.json.node.parent_id, nested.json.node.id);
   assert.equal(created.json.node.panes, 2);
   assert.ok(live.sessions.some((s) => s.name === 'built'), 'the agent was asked to create it');
@@ -972,7 +973,7 @@ check('a failed sessions.list keeps the agent connected, serves the last good li
     const opened = await api('POST', `/api/sessions/${names[0]}/open`, { cookie, body: {} });
     assert.equal(opened.status, 200, 'a session opens from the last good list');
     const created = await api('POST', '/api/sessions', { cookie, body: { name: 'made-while-slow', panes: 1 } });
-    assert.equal(created.status, 200, 'mutations work while only the list read fails');
+    assert.equal(created.status, 202, 'mutations work while only the list read fails');
   } finally {
     live.sessionsListError = null;
   }

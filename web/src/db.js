@@ -26,6 +26,13 @@ CREATE INDEX IF NOT EXISTS nodes_parent_idx ON nodes(parent_id);
 CREATE UNIQUE INDEX IF NOT EXISTS nodes_session_name_idx
   ON nodes(session_name) WHERE session_name IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS session_creations (
+  node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+  state TEXT NOT NULL,
+  error TEXT,
+  started_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS session_usage (
   session_name TEXT PRIMARY KEY,
   opened_at    INTEGER NOT NULL

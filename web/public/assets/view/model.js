@@ -2,9 +2,9 @@
 // the views draw. Each row carries a key that stays the same while the row stands for the same
 // thing, so a status change updates a row in place instead of replacing it.
 import { stateForSession } from '../status-lease.js';
-import { orderRecents } from '../recent-order.js';
+import { orderRecents, recentActivityAt, compareActivity } from '../recent-order.js';
 import { sessionPath } from '../session-url.js';
-import { fmtAge, fmtShortAge } from './format.js';
+import { fmtShortAge } from './format.js';
 import { identityOf, renamePair } from './store.js';
 
 export const UNFILED_KEY = '__unfiled__';
@@ -12,7 +12,7 @@ export const RECENTS_KEY = '__recents__';
 export const FOLDERS_KEY = '__folders__';
 
 export const STATE_TEXT = {
-  busy: 'working', background: 'working in background', idle: 'waiting for input', sleeping: 'sleeping',
+  creating: 'creating', failed: 'creation failed', busy: 'working', background: 'working in background', idle: 'waiting for input', sleeping: 'sleeping',
   waking: 'waking', absent: 'no Claude process', running: 'running', exited: 'exited', missing: 'not created',
   unknown: 'unknown',
 };
@@ -159,6 +159,9 @@ function statusByName(state) {
 }
 
 export function liveState(state, name) {
+  const leaf = leafBySession(state, name);
+  const creation = state.creations.find((item) => item.node_id === leaf?.id);
+  if (creation) return creation.state;
   if (!Array.isArray(state.sessions)) return 'unknown';
   const host = hostName(state, name);
   const session = state.sessions.find((s) => s.name === host);
@@ -167,20 +170,20 @@ export function liveState(state, name) {
   return stateForSession(session, statusByName(state), waking, state.statusAuthoritative);
 }
 
-function sortNewestFirst(a, b) {
-  const aa = Number(a.originalCreatedAt || a.original_created_at || a.createdAt || a.created_at || 0);
-  const bb = Number(b.originalCreatedAt || b.original_created_at || b.createdAt || b.created_at || 0);
-  if (aa !== bb) return bb - aa;
-  return String(a.name || '').localeCompare(String(b.name || ''));
+function activityEntry(state, name) {
+  const session = knownSession(state, name) || { name: hostName(state, name) };
+  return { session_name: name, last_activity_at: recentActivityAt(session, statusByName(state)) };
 }
 
-function sessionAge(state, name, fallback) {
-  const s = knownSession(state, name);
-  if (s) {
-    const at = Number(s.originalCreatedAt || s.original_created_at || s.createdAt || s.created_at || 0);
-    return at ? fmtAge(at, state.now) : (s.created || '');
-  }
-  return fallback ? fmtAge(fallback, state.now) : '';
+function sessionAge(state, name) {
+  return fmtShortAge(activityEntry(state, name).last_activity_at, state.now);
+}
+
+function orderedChildren(state, nodes) {
+  const sessions = nodes.filter((n) => n.kind === 'session').sort((a, b) =>
+    compareActivity(activityEntry(state, a.session_name), activityEntry(state, b.session_name)));
+  let index = 0;
+  return nodes.map((node) => node.kind === 'session' ? sessions[index++] : node);
 }
 
 function leafTitle(n) {
@@ -207,6 +210,9 @@ function sessionRow(state, { key, kind, name, depth, label, extraLabel, age, age
     href: sessionPath(shown), selected: sameSession(state, state.active, name),
     age, ageTitle: ageTitle || '', title: title || shown, guides: guides || null,
     create: kind === 'leaf' && st === 'missing',
+    pending: st === 'creating' || st === 'failed',
+    error: st === 'failed' ? state.creations.find((item) => item.node_id === id)?.error : '',
+    retry: st === 'failed',
   };
 }
 
@@ -218,7 +224,7 @@ function recentPath(state, name) {
 function recentItems(state) {
   const rows = Array.isArray(state.sessions)
     ? orderRecents(state.sessions, statusByName(state), state.recentLimit, { waking: state.waking, authoritative: state.statusAuthoritative })
-    : state.recents.slice(0, state.recentLimit).map((recent) => ({
+    : (state.recentLimit ? state.recents : []).map((recent) => ({
       session_name: recent.session_name,
       last_activity_at: Number(recent.last_activity_at || recent.last_response_at) || 0,
     }));
@@ -236,7 +242,7 @@ function leafItem(state, n, depth, guides) {
   return sessionRow(state, {
     key: 'leaf:' + n.id, kind: 'leaf', id: n.id, name: n.session_name, depth,
     label: renamePair(state, n.session_name) ? shown : n.name,
-    age: sessionAge(state, n.session_name, n.created_at), title: leafTitle({ ...n, session_name: shown }), guides,
+    age: sessionAge(state, n.session_name), title: leafTitle({ ...n, session_name: shown }), guides,
   });
 }
 
@@ -245,7 +251,7 @@ function folderItems(state, nodes, depth, continuations) {
     const last = index === nodes.length - 1;
     if (n.kind !== 'folder') return leafItem(state, n, depth, { continuations, last, stem: false });
     const open = !state.collapsed.has(n.id);
-    const kids = childrenOf(state.nodes, n.id);
+    const kids = orderedChildren(state, childrenOf(state.nodes, n.id));
     const item = {
       key: 'folder:' + n.id, kind: 'folder', id: n.id, name: n.name, label: n.name, depth, level: depth + 2,
       ariaLabel: 'Folder ' + n.name, open, count: folderSessionCount(state.nodes, n.id),
@@ -284,13 +290,13 @@ function unfiledItems(state) {
     const s = knownSession(state, n.session_name) || {};
     entries.push({ session: { name: n.session_name, originalCreatedAt: s.originalCreatedAt, createdAt: s.createdAt }, leaf: n });
   }
-  entries.sort((a, b) => sortNewestFirst(a.session, b.session));
+  entries.sort((a, b) => compareActivity(activityEntry(state, a.session.name), activityEntry(state, b.session.name)));
   return entries.map((entry, index) => {
     if (entry.leaf) return leafItem(state, entry.leaf, 0, { continuations: [], last: index === entries.length - 1, stem: false });
     const s = entry.session;
     return sessionRow(state, {
       key: 'unfiled:' + identityOf(state, s.name), kind: 'unfiled', name: s.name, depth: 0, extraLabel: ', unfiled',
-      age: sessionAge(state, s.name, s.createdAt || s.created_at),
+      age: sessionAge(state, s.name),
     });
   });
 }

@@ -96,6 +96,7 @@ try {
     await page.waitForFunction(() => ['alpha', 'beta'].every((n) => /st-(busy|background)/.test(document.querySelector(`#tree .row[data-kind="recent"][data-name="${n}"] .dot`)?.className)));
     await page.evaluate(() => { window.__frame = document.querySelector('.term-frame.active'); });
     const history = await page.evaluate(() => history.length);
+    const targetKey = await page.locator(`#tree .row[data-kind="${kind}"][data-name="${oldName}"]`).getAttribute("data-key");
     const before = await page.evaluate(TAG_TREE);
     const keys = Object.keys(before).filter((key) => key.startsWith('recent:') || key.startsWith(kind + ':'));
     await watch(oldName, newName);
@@ -134,7 +135,7 @@ try {
     assert.equal(seen.unfiledNew, kind === 'unfiled' ? 1 : 0, 'Unfiled never showed the session twice or as a stray');
     assert.equal(await page.evaluate(() => history.length), history, 'the address was replaced, not pushed');
     for (const key of keys) assert.equal(after[key]?.[0], before[key][0], `row ${key} is the same element`);
-    const names = await page.evaluate((key) => [...document.querySelectorAll('#tree .row')].filter((row) => row.dataset.key === key).map((row) => row.dataset.name), `${kind === 'leaf' ? keys.find((k) => k.startsWith('leaf:')) : keys.find((k) => k.startsWith('unfiled:'))}`);
+    const names = await page.evaluate((key) => [...document.querySelectorAll('#tree .row')].filter((row) => row.dataset.key === key).map((row) => row.dataset.name), targetKey);
     assert.deepEqual(names, [newName], 'the row shows the new name');
     pass(`renaming the open ${kind} session ${oldName} to ${newName} (${took} ms, under status flow): no notice, no missing row, no Create, same frame, same rows, address replaced`);
   }

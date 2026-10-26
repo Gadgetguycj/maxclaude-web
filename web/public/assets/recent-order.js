@@ -27,14 +27,17 @@ export function recentActivityAt(session, sessionStatus) {
 // Inside the green group the order is by name. A working session's only time is its last event,
 // which moves on every tool call, so ordering green rows by time would reorder them all the time.
 // A row therefore moves only when it changes group, or when a session appears or goes. Every other
-// group is newest first, ties by name. The limit applies after this order, so with more green
-// sessions than the limit the first names win.
+// group is newest first, ties by name. The count controls viewport height; only Off removes rows.
+export function compareActivity(left, right) {
+  return right.last_activity_at - left.last_activity_at
+    || left.session_name.localeCompare(right.session_name);
+}
+
 export function compareRecents(left, right) {
   const group = recentGroup(left.state) - recentGroup(right.state);
   if (group) return group;
   if (recentGroup(left.state) === 0) return left.session_name.localeCompare(right.session_name);
-  return right.last_activity_at - left.last_activity_at
-    || left.session_name.localeCompare(right.session_name);
+  return compareActivity(left, right);
 }
 
 export function orderRecents(sessions, sessionStatus, limit, { waking = null, authoritative = true } = {}) {
@@ -47,6 +50,5 @@ export function orderRecents(sessions, sessionStatus, limit, { waking = null, au
       last_activity_at: recentActivityAt(session, status),
       state: stateForSession(session, status, Boolean(waking && waking.has(session.name)), authoritative),
     }))
-    .sort(compareRecents)
-    .slice(0, limit);
+    .sort(compareRecents);
 }

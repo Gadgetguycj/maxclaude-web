@@ -122,6 +122,16 @@ export class ScriptedAgent {
         oldUnit: 'old.service', newUnit: 'new.service', claudeReports: [`Session renamed to ${params.newName}`],
       }), this.renameDelayMs);
     }
+    if (msg.method === 'sessions.create') {
+      this.pendingCreate = () => {
+        if (this.createError) return this.refuse(msg, 'internal', this.createError);
+        this.rows.set(params.name, { name: params.name, createdAt: Date.now(), lastActivityAt: Date.now(), state: 'idle' });
+        this.push();
+        this.reply(msg, { name: params.name });
+      };
+      return;
+    }
+    if (msg.method === 'transcripts.list') return this.reply(msg, { transcripts: [] });
     if (msg.method === 'sessions.delete') {
       this.rows.delete(params.name);
       this.push();

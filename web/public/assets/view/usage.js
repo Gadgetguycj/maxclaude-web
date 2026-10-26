@@ -1,6 +1,6 @@
 // Plan usage meters in the terminal header. The agent sends one snapshot with a meter per
 // window: percent used, reset time, and whether the value is stale or unavailable. Each meter
-// is a small bar with its percent. Hover shows its reset time, and a click or tap opens a panel
+// is a small bar with its percent and reset time. A click or tap opens a panel
 // that lists every window with its reset time.
 import { html } from './html.js';
 
@@ -21,7 +21,7 @@ export function meterLevel(meter) {
 
 export function percentText(meter) {
   const percent = meterPercent(meter);
-  return percent === null ? '–' : Math.round(percent) + '%';
+  return percent === null ? 'unavailable' : Math.round(percent) + '%';
 }
 
 function untilText(ms, now) {
@@ -35,7 +35,6 @@ function untilText(ms, now) {
 // "resets Thu 09:59, in 6d 13h". Within a day the weekday is left out.
 export function resetText(meter, now = Date.now()) {
   const at = Number(meter?.resetsAt);
-  if (meterPercent(meter) === null) return '';
   if (!isFinite(at) || at <= 0) return 'reset time unknown';
   const when = new Date(at);
   const time = when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -44,7 +43,7 @@ export function resetText(meter, now = Date.now()) {
 }
 
 export function meterDetail(meter, now = Date.now()) {
-  if (meterPercent(meter) === null) return 'unavailable' + (meter?.error ? ': ' + meter.error : '');
+  if (meterPercent(meter) === null) return ['unavailable' + (meter?.error ? ': ' + meter.error : ''), Number(meter?.resetsAt) > 0 ? 'last known ' + resetText(meter, now) : ''].filter(Boolean).join(', ');
   const parts = [percentText(meter) + ' used', resetText(meter, now)];
   if (meter.stale) parts.push('stale, the last refresh failed' + (meter.error ? ': ' + meter.error : ''));
   return parts.join(', ');
@@ -65,7 +64,7 @@ function Meter({ meter, now }) {
   return html`<span class=${cls} data-key=${meter.key} title=${meterTooltip(meter, now)}>
     <span class="meter-label">${meter.label}</span>
     <span class="meter-bar" aria-hidden="true"><span class="meter-fill" style=${'width:' + (percent === null ? 0 : percent) + '%'}></span></span>
-    <span class="meter-pct">${percentText(meter)}</span>
+    <span class="meter-values"><span class="meter-pct">${percentText(meter)}</span> <span class="meter-reset">${meterPercent(meter) === null && Number(meter.resetsAt) > 0 ? "last known " : ""}${resetText(meter, now)}</span></span>
   </span>`;
 }
 

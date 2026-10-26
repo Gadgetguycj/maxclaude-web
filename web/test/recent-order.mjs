@@ -13,7 +13,7 @@ assert.deepEqual(evidence.map((row) => row.session_name), EXPECTED_20261002);
 assert.equal(greenFirst(evidence), true);
 assert.ok(evidence.findIndex((row) => row.session_name === 'session-a') < evidence.findIndex((row) => row.state === 'idle'));
 assert.deepEqual(evidence.map((row) => row.last_activity_at), EXPECTED_20261002.map((name) => ACTIVITY_20261002[name]));
-assert.deepEqual(orderRecents(sessions, status, 3).map((row) => row.session_name), ['session-a', 'session-b', 'session-c']);
+assert.deepEqual(orderRecents(sessions, status, 3).map((row) => row.session_name), EXPECTED_20261002);
 assert.deepEqual(orderRecents(sessions, status, 0), []);
 
 const tiers = orderRecents(

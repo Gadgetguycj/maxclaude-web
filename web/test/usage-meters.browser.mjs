@@ -3,13 +3,13 @@
 // The agent pushes a usage snapshot. The hub keeps it, serves it in /api/state and pushes it to
 // every page. This runs the real hub and app.js with a scripted agent and checks, at 1440 px and
 // at 390 px:
-//   - four meters sit right of the open session's name, inside the header, with nothing cut off
+//   - four meters show inline reset times, inside the header, with nothing cut off
 //     and the session name still readable;
 //   - each meter's bar width and percent match the snapshot, and its tooltip names the reset;
 //   - a new snapshot updates the meters in place, without a reload;
 //   - a click or tap opens a panel with every window's reset time, and Escape or a click outside
 //     closes it;
-//   - a window the agent reports unavailable shows a dash and why, and a stale one is dimmed.
+//   - a window the agent reports unavailable says unavailable and why, and a stale one is dimmed.
 //
 //   node test/usage-meters.browser.mjs        MCW_SHOT_DIR=<dir> also saves screenshots
 import assert from 'node:assert/strict';
@@ -57,10 +57,11 @@ const READ = () => {
     const fill = el.querySelector('.meter-fill').getBoundingClientRect();
     return {
       key: el.dataset.key, cls: el.className, label: el.querySelector('.meter-label').textContent,
-      pct: el.querySelector('.meter-pct').textContent, title: el.title,
+      pct: el.querySelector('.meter-pct').textContent, reset: el.querySelector('.meter-reset').textContent, title: el.title,
       left: box.left, right: box.right, top: box.top, bottom: box.bottom,
       fillRatio: track.width ? fill.width / track.width : 0,
       labelClipped: el.querySelector('.meter-label').scrollWidth > el.querySelector('.meter-label').clientWidth + 1,
+      resetRight: el.querySelector('.meter-reset').getBoundingClientRect().right,
     };
   });
   return {
@@ -75,10 +76,11 @@ function checkLayout(view, label) {
   assert.equal(view.meters.length, 4, `${label}: four meters`);
   assert.deepEqual(view.meters.map((meter) => meter.key), ['claude-week', 'claude-5h', 'model-fable', 'codex-week']);
   for (const meter of view.meters) {
-    assert.ok(meter.left >= view.nameRight - 0.5, `${label}: ${meter.key} starts left of the session name's end`);
-    assert.ok(meter.right <= view.actionsLeft + 0.5, `${label}: ${meter.key} runs into the header buttons`);
+    assert.ok(meter.left >= view.bar.left - 0.5, `${label}: ${meter.key} starts left of the session name's end`);
+    assert.ok(meter.right <= view.bar.right + 0.5, `${label}: ${meter.key} runs into the header buttons`);
     assert.ok(meter.top >= view.bar.top - 0.5 && meter.bottom <= view.bar.bottom + 0.5, `${label}: ${meter.key} leaves the header`);
     assert.equal(meter.labelClipped, false, `${label}: ${meter.key} label is clipped`);
+    assert.ok(meter.resetRight <= view.bar.right + 0.5, `${label}: ${meter.key} reset is clipped`);
   }
   assert.ok(view.pageScroll <= view.viewport, `${label}: the page scrolls sideways`);
   assert.ok(view.nameWidth >= 60, `${label}: the session name has only ${view.nameWidth}px`);
@@ -101,10 +103,11 @@ try {
     let view = await page.evaluate(READ);
     checkLayout(view, label);
     assert.deepEqual(view.meters.map((meter) => meter.pct), ['21%', '39%', '3%', '0%']);
+    assert.ok(view.meters.every((meter) => meter.reset.startsWith('resets ')), 'reset times are inline without hover');
     assert.deepEqual(view.meters.map((meter) => Math.round(meter.fillRatio * 100)), [21, 39, 3, 0]);
     assert.match(view.meters[0].title, /^Claude weekly, all models: 21% used, resets \w{3} \d\d:\d\d(?: [AP]M)?, in 6d 6h$/);
     assert.match(view.meters[1].title, /^Claude 5-hour: 39% used, resets \d\d:\d\d(?: [AP]M)?, in 3h 0m$/);
-    pass(`${label} ${width}px: four meters right of the name (name ${Math.round(view.nameWidth)}px wide), bars and percents match, tooltips name the reset`);
+    pass(`${label} ${width}px: four meters with inline resets (name ${Math.round(view.nameWidth)}px wide), bars and percents match, tooltips name the reset`);
     if (SHOTS) {
       await page.screenshot({ path: `${SHOTS}/usage-${width}.png` });
       const box = await page.locator('.term-bar').boundingBox();
@@ -145,20 +148,22 @@ try {
 
     // Unavailable and stale.
     agent.sendUsage(snapshot(Date.now(), { fableAvailable: false, claudeStale: true }));
-    await page.waitForFunction(() => document.querySelector('#usage .meter[data-key="model-fable"] .meter-pct').textContent === '–', null, { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector('#usage .meter[data-key="model-fable"] .meter-pct').textContent === 'unavailable', null, { timeout: 5000 });
     view = await page.evaluate(READ);
     checkLayout(view, `${label} unavailable`);
     const fable = view.meters.find((meter) => meter.key === 'model-fable');
     assert.match(fable.cls, /\bna\b/);
-    assert.equal(fable.title, 'Fable weekly: unavailable: the usage answer has no weekly window for Fable');
+    assert.match(fable.title, /^Fable weekly: unavailable: the usage answer has no weekly window for Fable, last known resets /);
+    assert.match(fable.reset, /^last known resets /);
     assert.match(view.meters[0].cls, /\bstale\b/);
     assert.match(view.meters[0].title, /stale, the last refresh failed: the usage endpoint is rate limiting/);
-    pass(`${label}: an unavailable window shows a dash and the reason, a stale one is dimmed and says why`);
+    pass(`${label}: an unavailable window says unavailable and the reason, a stale one is dimmed and says why`);
 
     // A reload gets the hub's stored snapshot from /api/state.
     await page.reload();
     await page.waitForFunction(() => document.querySelectorAll('#usage .meter').length === 4, null, { timeout: 10000 });
-    pass(`${label}: a reload shows the meters from the hub's stored snapshot`);
+    assert.match(await page.locator('#usage .meter[data-key="model-fable"] .meter-reset').textContent(), /^last known resets /);
+    pass(`${label}: a reload retains unavailable meters and their last known reset from the hub`);
     agent.sendUsage(snapshot(t0));
     assert.deepEqual(errors, []);
     await page.close();

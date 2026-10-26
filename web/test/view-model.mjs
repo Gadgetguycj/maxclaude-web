@@ -126,3 +126,27 @@ const fresh = createState({ now: NOW });
 assert.equal(fresh.loaded, false, 'the page starts with no state read');
 assert.equal(liveState(fresh, 'alpha'), 'unknown');
 console.log('before the first state read nothing is known: PASS');
+
+const activity = createState({ now: NOW });
+const fixtures = ['old-created', 'new-created', 'root-old', 'root-new', 'unknown'];
+const fixtureTree = [{ id: 'folder', kind: 'folder', name: 'Activity', position: 1 },
+  ...fixtures.map((name, i) => ({ id: name, kind: 'session', name, session_name: name,
+    parent_id: i < 2 ? 'folder' : null, position: i, created_at: NOW - 1000 }))];
+const data = serverState(fixtures, fixtureTree, 3);
+data.sessions.forEach((session, i) => { session.lastActivityAt = i === 4 ? 0 : NOW - (i + 1) * 60000; });
+applyServerState(activity, data);
+applyStatus(activity, { 'new-created': { state: 'idle', lastActivityAt: NOW - 10000 },
+  'root-new': { state: 'idle', lastActivityAt: NOW - 20000 } }, true);
+let activityRows = flatRows(sidebarModel(activity));
+assert.deepEqual(activityRows.filter((row) => row.kind === 'leaf' && row.depth > 0).map((row) => row.name), ['new-created', 'old-created']);
+assert.deepEqual(activityRows.filter((row) => row.kind === 'leaf' && row.depth === 0).map((row) => row.name), ['root-new', 'root-old', 'unknown']);
+for (const row of activityRows.filter((row) => row.name === 'new-created')) assert.equal(row.age, '<1m');
+assert.equal(activityRows.find((row) => row.name === 'old-created').age, '1m');
+assert.equal(activityRows.find((row) => row.name === 'unknown').age, '');
+assert.equal(activityRows.filter((row) => row.kind === 'recent').length, 5, 'count limits height, never membership');
+const stableKeys = activityRows.map((row) => row.key).sort();
+applyStatus(activity, { 'old-created': { state: 'idle', lastActivityAt: NOW } }, true);
+activityRows = flatRows(sidebarModel(activity));
+assert.equal(activityRows.find((row) => row.kind === 'leaf').name, 'old-created');
+assert.deepEqual(activityRows.map((row) => row.key).sort(), stableKeys);
+console.log('folders and Unfiled use last activity, row ages exclude creation, live sorting keeps keys: PASS');

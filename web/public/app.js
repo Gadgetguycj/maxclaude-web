@@ -4,7 +4,7 @@ import { sessionFromPath, sessionPath } from './assets/session-url.js';
 import { html, render as renderInto, Component } from './assets/view/html.js';
 import { fmtSecs, fmtAge, fmtBytes } from './assets/view/format.js';
 import {
-  createState, createStore, applyServerState, applyStateError, applyStatus,
+  createState, createStore, applyServerState, applyStateError, applyStatus, applyUsage,
   startRename, confirmRename, abortRename, renamePair, pushModal, removeModal,
 } from './assets/view/store.js';
 import * as M from './assets/view/model.js';
@@ -156,11 +156,12 @@ function startEvents() {
   };
   eventSource.addEventListener('state', update);
   eventSource.addEventListener('sessions.status', update);
+  eventSource.addEventListener('creations', function () { refreshState(true); });
   eventSource.addEventListener('agent', function () { refreshState(true); });
   eventSource.addEventListener('usage', function (ev) {
     try {
       const usage = JSON.parse(ev.data);
-      if (usage && Array.isArray(usage.meters)) { S.usage = usage; renderViews(); }
+      if (usage && Array.isArray(usage.meters)) { applyUsage(S, usage); renderViews(); }
     } catch (e) { /* malformed server event is ignored */ }
   });
 }
@@ -458,6 +459,11 @@ function updateChrome() {
   $('#files-button').disabled = !S.active;
 }
 
+const headerResize = new ResizeObserver(([entry]) => {
+  document.querySelector('.body').style.setProperty('--term-header-height', entry.target.offsetHeight + 'px');
+});
+headerResize.observe(document.querySelector('.term-bar'));
+
 /* ---------- tree interaction ---------- */
 
 function toggleCollapse(key) {
@@ -543,6 +549,7 @@ function activateLeaf(row) {
   const n = nodeById(row.dataset.id);
   if (!n) return;
   const st = liveState(n.session_name);
+  if (st === 'creating' || st === 'failed') return;
   if (st === 'missing') {
     if (canMutate()) dlgRecreate(n);
     else toast('Session ' + n.session_name + ' is not created on the host.', true);
@@ -552,6 +559,7 @@ function activateLeaf(row) {
 }
 
 function rowAction(act, row, btn) {
+  if (act === 'retry') { const n = nodeById(row.dataset.id); if (n) queueCreation({ name: n.session_name, panes: n.panes, workdir: n.workdir, resume_sid: n.resume_sid, parent_id: n.parent_id }); return; }
   if (act === 'create') { const n = nodeById(row.dataset.id); if (n) dlgRecreate(n); return; }
   if (act !== 'menu') return;
   openRowMenu(row, btn);
@@ -1967,15 +1975,13 @@ function dlgRecreate(n) {
     ],
     submitLabel: 'Create session',
     onSubmit: async function () {
-      await api('POST', '/api/sessions', {
+      queueCreation({
         name: n.session_name,
         panes: Number(n.panes) || 1,
         workdir: n.workdir || '',
         resume_sid: n.resume_sid || null,
         parent_id: n.parent_id || null
       });
-      await refreshState(true);
-      openSession(n.session_name);
     }
   });
 }
@@ -2026,6 +2032,31 @@ function PaneCount({ panes, onPick }) {
       onClick=${() => onPick(n)}>${String(n)}</button>`)}</div>`;
 }
 
+function queueCreation(params) {
+  const existing = leafBySession(params.name);
+  const node = existing || { id: 'creating:' + params.name, kind: 'session', name: params.name,
+    session_name: params.name, parent_id: params.parent_id, position: endPosition(params.parent_id),
+    panes: params.panes, workdir: params.workdir, resume_sid: params.resume_sid };
+  S.localCreations.set(params.name, { node });
+  if (!existing) S.nodes.push(node);
+  S.creations = S.creations.filter((item) => item.node_id !== node.id).concat({ node_id: node.id, state: 'creating' });
+  if (params.parent_id) S.collapsed.delete(params.parent_id);
+  S.collapsed.delete(params.parent_id ? M.FOLDERS_KEY : M.UNFILED_KEY);
+  render();
+  void api('POST', '/api/sessions', params).then((result) => {
+    S.localCreations.delete(params.name);
+    S.nodes = S.nodes.filter((item) => item.session_name !== params.name);
+    S.nodes.push(result.node);
+    S.creations = S.creations.filter((item) => item.node_id !== node.id && item.node_id !== result.node.id).concat({ node_id: result.node.id, state: result.state });
+    render();
+    return refreshState(true);
+  }).catch((error) => {
+    S.localCreations.set(params.name, { node, error: errText(error) });
+    S.creations = S.creations.filter((item) => item.node_id !== node.id).concat({ node_id: node.id, state: 'failed', error: errText(error) });
+    render();
+  });
+}
+
 function dlgNewSession(parentId) {
   modal({
     title: 'New session',
@@ -2043,7 +2074,7 @@ function dlgNewSession(parentId) {
       if (!NAME_RE.test(name)) throw new Error('Use letters, numbers, dot, dash or underscore, 1 to 64 characters.');
       const workdir = v.workdir.trim();
       if (workdir && workdir.charAt(0) !== '/') throw new Error('The working directory must be an absolute path.');
-      await api('POST', '/api/sessions', {
+      queueCreation({
         name: name,
         panes: v.panes,
         workdir: workdir,
@@ -2051,8 +2082,6 @@ function dlgNewSession(parentId) {
         parent_id: parentId || null
       });
       if (parentId) { S.collapsed.delete(parentId); persistView(); }
-      await refreshState(true);
-      openSession(name);
     }
   });
 }

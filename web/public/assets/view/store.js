@@ -16,10 +16,11 @@ export function createState({ collapsed = [], now = Date.now() } = {}) {
     usageOpen: false,
     stateError: null,
     nodes: [],
+    creations: [],
+    localCreations: new Map(),
     // The host's session list, or null while the agent or hub is away.
     sessions: null,
-    // The last session list the hub answered with. A session's creation time does not change
-    // while the agent is away, so rows keep their order, age and leafless members from it.
+    // The last session list keeps activity ages and leafless rows while the agent is away.
     knownSessions: [],
     sessionStatus: {},
     statusAuthoritative: false,
@@ -77,12 +78,27 @@ function renameFor(state, name) {
 /* ---------- inputs ---------- */
 
 // One /api/state answer.
+export function applyUsage(state, usage) {
+  if (!Array.isArray(usage?.meters)) return;
+  state.usage = { ...usage, meters: usage.meters.map((meter) => ({ ...meter,
+    resetsAt: meter.resetsAt || state.usage?.meters?.find((old) => old.key === meter.key)?.resetsAt || null,
+  })) };
+}
+
 export function applyServerState(state, data) {
   state.loaded = true;
   state.agent = data?.agent || { connected: false };
   state.sessionsDegraded = data?.sessions_degraded || null;
-  if (data?.usage) state.usage = data.usage;
+  if (data?.usage) applyUsage(state, data.usage);
   state.nodes = Array.isArray(data?.tree) ? data.tree : [];
+  state.creations = Array.isArray(data?.creations) ? data.creations : [];
+  for (const [name, local] of state.localCreations) {
+    const node = state.nodes.find((node) => node.session_name === name) || local.node;
+    if (node === local.node) state.nodes.push(node);
+    if (!state.creations.some((item) => item.node_id === node.id)) {
+      state.creations.push({ node_id: node.id, state: local.error ? 'failed' : 'creating', error: local.error });
+    }
+  }
   state.sessions = Array.isArray(data?.sessions) ? data.sessions : null;
   // Without a session list the hub has no Recent to send. Recent keeps the rows it had, with
   // unknown lights, until the list is back.
