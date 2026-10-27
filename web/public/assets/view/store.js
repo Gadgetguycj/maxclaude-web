@@ -26,6 +26,7 @@ export function createState({ collapsed = [], now = Date.now() } = {}) {
     statusAuthoritative: false,
     recents: [],
     recentLimit: 5,
+    recentQuery: '',
     collapsed: new Set(collapsed),
     active: null,
     notice: null,

@@ -150,3 +150,29 @@ activityRows = flatRows(sidebarModel(activity));
 assert.equal(activityRows.find((row) => row.kind === 'leaf').name, 'old-created');
 assert.deepEqual(activityRows.map((row) => row.key).sort(), stableKeys);
 console.log('folders and Unfiled use last activity, row ages exclude creation, live sorting keeps keys: PASS');
+
+const search = createState({ now: NOW });
+applyServerState(search, serverState(['cab', 'ABacus', 'beta', 'dab'], tree));
+const allSearchRows = flatRows(sidebarModel(search));
+const allRecent = allSearchRows.filter((row) => row.kind === 'recent');
+assert.equal(search.recentQuery, '');
+assert.equal(allRecent.length, 4);
+for (const query of ['ab', 'AB']) {
+  search.recentQuery = query;
+  const filtered = flatRows(sidebarModel(search));
+  const recent = filtered.filter((row) => row.kind === 'recent');
+  assert.deepEqual(recent.map((row) => [row.name, row.key]),
+    allRecent.filter((row) => row.name.toLowerCase().includes('ab')).map((row) => [row.name, row.key]));
+  assert.deepEqual(recent.map((row) => [row.posinset, row.setsize]), [[1, 3], [2, 3], [3, 3]]);
+  const outsideRecent = (row) => row.kind !== 'recent' && row.key !== 'section:__recents__';
+  assert.deepEqual(filtered.filter(outsideRecent), allSearchRows.filter(outsideRecent));
+}
+search.recentQuery = 'no-match';
+assert.deepEqual(sidebarModel(search).sections[0].children.map(({ kind, label }) => ({ kind, label })),
+  [{ kind: 'recent-empty', label: 'No session matches no-match' }]);
+applyServerState(search, serverState(['cab', 'ABacus', 'beta', 'dab'], tree));
+assert.equal(search.recentQuery, 'no-match', 'server reads keep the view query');
+search.recentQuery = '';
+assert.deepEqual(sidebarModel(search).sections[0].children, allRecent);
+assert.equal(createState().recentQuery, '', 'a new page starts empty');
+console.log('Recent filters names case-insensitively, preserves order and other sections, and shows an empty row: PASS');

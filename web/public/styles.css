@@ -144,7 +144,8 @@ body.sidebar-collapsed .sidebar-rail { display: grid; }
 .section-main { display: flex; align-items: center; gap: 2px; height: 100%; min-width: 0; }
 .section-chevron, .folder-chevron { width: 14px; height: 14px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.4; transition: transform .12s ease; }
 .row.open .section-chevron, .row.open .folder-chevron { transform: rotate(90deg); }
-.recent-controls { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--dim); text-transform: none; letter-spacing: normal; font-weight: 400; }
+.row.section[data-id="__recents__"] .section-main { flex: 0 0 auto; }
+.recent-controls { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--dim); text-transform: none; letter-spacing: normal; font-weight: 400; }
 .row .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row.folder { color: var(--bright); font-weight: 600; }
 .row .count { flex: 0 0 auto; font-size: 10px; font-weight: 600; color: var(--dim); background: var(--panel2); border-radius: 8px; padding: 0 6px; line-height: 15px; }
@@ -180,6 +181,10 @@ body.sidebar-collapsed .sidebar-rail { display: grid; }
 .badge.b-exited { color: var(--warn); border-color: #5c4417; }
 .badge.b-absent { color: #b4bec8; border-color: #49535e; }
 .recent-limit { flex: 0 0 auto; min-width: 45px; height: 18px; color: var(--text); background: var(--panel2); border: 1px solid #333a47; border-radius: 3px; padding: 0 3px; font: inherit; font-size: 11px; }
+.recent-search-box { position: relative; flex: 1 1 90px; min-width: 0; display: flex; }
+.recent-search { width: 100%; min-width: 0; height: 18px; color: var(--text); background: var(--panel2); border: 1px solid #333a47; border-radius: 3px; padding: 0 18px 0 3px; font: inherit; font-size: 11px; font-weight: 400; letter-spacing: normal; }
+.recent-search-clear { position: absolute; right: 1px; top: 1px; width: 16px; height: 16px; color: var(--dim); font: inherit; display: grid; place-items: center; }
+.recent-empty { color: var(--dim); padding-left: 14px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* Every light of a kind blinks in step: blink.js pins each of these animations to the document
    timeline when it starts. */
 @keyframes activity-blink { 50% { opacity: .25; } }
@@ -407,6 +412,8 @@ body.file-dragging .files-drop { border-color: var(--accent); background: var(--
   .row .age { font-size: 13px; }
   .act { width: 32px; height: 40px; font-size: 20px; opacity: 1; }
   .recent-limit { min-width: 50px; height: 30px; font-size: 13px; }
+  .recent-search { height: 30px; font-size: 13px; padding-right: 28px; }
+  .recent-search-clear { width: 26px; height: 28px; }
   .scrim { display: block; position: absolute; inset: 0; z-index: 20; background: rgba(3,5,8,.6); }
   .legend { height: 28px; flex-basis: 28px; gap: 6px; padding: 0 6px 0 8px; font-size: 11px; }
   .legend-items { gap: 7px; }

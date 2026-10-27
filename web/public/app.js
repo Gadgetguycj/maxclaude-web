@@ -362,6 +362,9 @@ function renderViews() {
   const ctx = {
     geo: rowGeometry(isPhone()), drag: S.drag, canMutate: canMutate(),
     recentLimit: S.recentLimit, onRecentLimit: onRecentLimit,
+    recentQuery: S.recentQuery,
+    onRecentQuery: (query) => { S.recentQuery = query; renderViews(); },
+    onOpenSession: openSession,
   };
   renderInto(html`<${TreeView} model=${M.sidebarModel(S)} ctx=${ctx} />`, treeEl);
   renderInto(html`<${MenuLayer} menu=${S.menu} onClose=${closeMenu} />`, menuRoot);

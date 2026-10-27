@@ -104,13 +104,34 @@ function RecentLimit({ ctx }) {
     </select></span>`;
 }
 
+function RecentSearch({ item, ctx }) {
+  const input = createRef();
+  const clear = () => { const el = input.current; ctx.onRecentQuery(''); el.focus(); };
+  return html`<span class="recent-search-box" onClick=${(ev) => ev.stopPropagation()}
+      onKeyDown=${(ev) => ev.stopPropagation()}>
+    <input ref=${input} type="text" class="recent-search" placeholder="Search" aria-label="Search recent sessions"
+      value=${ctx.recentQuery} onInput=${(ev) => ctx.onRecentQuery(ev.currentTarget.value)}
+      onKeyDown=${(ev) => {
+        ev.stopPropagation();
+        if (ev.key === 'Escape') { ev.preventDefault(); clear(); }
+        else if (ev.key === 'Enter' && !ev.isComposing) {
+          ev.preventDefault();
+          const first = item.children.find((child) => child.kind === 'recent');
+          if (first) ctx.onOpenSession(first.name);
+        }
+      }} />
+    ${ctx.recentQuery ? html`<button type="button" class="recent-search-clear" aria-label="Clear search"
+      onClick=${clear}>×</button>` : null}
+  </span>`;
+}
+
 function SectionRow({ item, ctx }) {
   return html`<div class=${'row section' + (item.open ? ' open' : '')} role="treeitem" tabindex="0"
       aria-level="1" aria-setsize=${item.setsize} aria-posinset=${item.posinset}
       aria-expanded=${item.open ? 'true' : 'false'} aria-owns=${owns(item)} aria-label=${item.ariaLabel}
       data-kind="section" data-id=${item.id} data-key=${item.key}>
     <span class="section-main"><${Chevron} className="section-chevron" /><span class="name">${item.label}</span></span>
-    ${item.extra === 'recent-limit' ? html`<${RecentLimit} ctx=${ctx} />` : null}
+    ${item.extra === 'recent-limit' ? html`<${RecentSearch} item=${item} ctx=${ctx} /><${RecentLimit} ctx=${ctx} />` : null}
   </div>`;
 }
 
@@ -121,6 +142,7 @@ function TreeNode({ item, ctx }) {
     const Row = item.kind === 'section' ? SectionRow : FolderRow;
     return html`<div class="tree-node" role="none"><${Row} item=${item} ctx=${ctx} /><${Group} item=${item} ctx=${ctx} /></div>`;
   }
+  if (item.kind === 'recent-empty') return html`<div class="row recent-empty" role="status">${item.label}</div>`;
   return html`<${SessionRow} item=${item} ctx=${ctx} />`;
 }
 

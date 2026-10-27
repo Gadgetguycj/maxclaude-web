@@ -82,6 +82,7 @@ Visibility changes trigger a refresh.
 Historical sleeping rows cannot restore an expired claim.
 
 Recent uses each session's own latest real event time.
+The Search box filters Recent by session name without changing its order.
 Polling time never becomes activity time.
 Transcript records use compact signatures and linear chunk assembly.
 The cache has a 512-entry and 16 MiB budget and protects unexpired growth observations.

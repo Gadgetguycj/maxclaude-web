@@ -228,13 +228,18 @@ function recentItems(state) {
       session_name: recent.session_name,
       last_activity_at: Number(recent.last_activity_at || recent.last_response_at) || 0,
     }));
-  return rows.map((recent) => sessionRow(state, {
+  const items = rows.map((recent) => sessionRow(state, {
     key: 'recent:' + identityOf(state, recent.session_name), kind: 'recent', name: recent.session_name, depth: 0,
     extraLabel: ', recent',
     age: fmtShortAge(recent.last_activity_at, state.now),
     ageTitle: recentPath(state, recent.session_name)
       + (recent.last_activity_at ? ' · ' + new Date(recent.last_activity_at).toLocaleString() : ''),
   }));
+  const query = state.recentQuery.toLowerCase();
+  if (!query) return items;
+  const matches = items.filter((item) => item.name.toLowerCase().includes(query));
+  return matches.length ? matches : [{ key: 'recent-empty', kind: 'recent-empty',
+    label: 'No session matches ' + state.recentQuery }];
 }
 
 function leafItem(state, n, depth, guides) {
