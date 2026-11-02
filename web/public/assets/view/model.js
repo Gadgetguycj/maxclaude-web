@@ -166,6 +166,7 @@ export function liveState(state, name) {
   const host = hostName(state, name);
   const session = state.sessions.find((s) => s.name === host);
   if (!session) return renamePair(state, name) ? 'unknown' : 'missing';
+  if (session.engine === 'codex') return 'unknown';
   const waking = state.waking.has(host) || state.waking.has(name);
   return stateForSession(session, statusByName(state), waking, state.statusAuthoritative);
 }
@@ -205,6 +206,7 @@ function sessionRow(state, { key, kind, name, depth, label, extraLabel, age, age
   const shown = hostName(state, name);
   return {
     key, kind, id: id || null, name: shown, depth, level: depth + 2,
+    engine: sessionByName(state, name)?.engine,
     label: label || shown, state: st, stateText: stateLabel(st),
     ariaLabel: (label || shown) + ', ' + stateLabel(st) + (extraLabel || ''),
     href: sessionPath(shown), selected: sameSession(state, state.active, name),

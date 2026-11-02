@@ -21,6 +21,7 @@ command -v node >/dev/null || { echo "node is not on PATH" >&2; exit 1; }
 install -d -m 700 "$STATE_DIR"
 install -d -m 755 "$UNIT_DIR"
 install -d -m 755 "$HOME/.local/bin"
+install -m 755 "$HERE/../bin/maxclaude-pane" "$HOME/.local/bin/maxclaude-pane"
 install -m 755 "$HERE/bin/mcw-session-status" "$HOME/.local/bin/mcw-session-status"
 install -m 755 "$HERE/bin/mcw-status-events.py" "$HOME/.local/bin/mcw-status-events.py"
 

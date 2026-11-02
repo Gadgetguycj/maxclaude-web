@@ -290,6 +290,22 @@ only as an EXITED session is allowed, zellij resurrects it.
  "unit": "maxclaude-named@demo.service", "envFile": "/home/user/.config/maxclaude/sessions/demo.env"}
 ```
 
+### `sessions.setEngine`
+
+Params: `{ "name": "example", "engine": "codex" }`.
+The engine must be `claude` or `codex`. The name follows the `sessions.create`
+name rule. Returns `{ "name": "example", "engine": "codex", "changed": true }`.
+Selecting the saved engine returns `changed: false`.
+
+A switch requires one running engine pane and a known conversation transcript.
+The agent saves the working directory, conversation identifiers, and a one-use
+handoff prompt. It signals the pane supervisor, which stops and reaps the current
+engine before launching the selected engine. Legacy panes migrate by restarting
+only their session service. Missing or ambiguous conversations return `conflict`.
+
+The hub exposes this operation as `POST /api/sessions/engine` with the same params.
+Session listings include `engine`. Codex activity remains `unknown`.
+
 ### 6.5 `sessions.rename`
 
 ```json

@@ -57,6 +57,7 @@ function SessionRow({ item, ctx }) {
     <${Guides} geo=${ctx.geo} depth=${item.depth} guides=${item.guides} />
     <span class="slot"><span class=${'dot st-' + item.state} title=${item.stateText}></span></span>
     <span class="name" title=${item.title}>${item.label}</span>
+    ${item.engine === 'codex' ? html`<span class="engine-label">Codex</span>` : null}
     ${item.create ? html`<button class="act wide" type="button" disabled=${!ctx.canMutate}
         aria-label=${'Create session ' + item.name} data-act="create">Create</button>` : null}
     ${item.pending ? html`<span class="creation-state" title=${item.error || item.stateText}>${item.error ? 'Failed: ' + item.error : item.stateText}</span>` : null}
@@ -152,9 +153,9 @@ export function TreeView({ model, ctx }) {
 
 /* ---------- terminal header and notice ---------- */
 
-export function TermTitle({ name, state, stateText }) {
+export function TermTitle({ name, engine, state, stateText }) {
   if (!name) return null;
-  return html`<span class="slot"><span class=${'dot st-' + state} title=${stateText}></span></span><span class="term-name" title=${name}>${name}</span>`;
+  return html`<span class="slot"><span class=${'dot st-' + state} title=${stateText}></span></span><span class="term-name" title=${name}>${name}</span>${engine === 'codex' ? html`<span class="engine-label">Codex</span>` : null}`;
 }
 
 export function NoticeView({ notice, onHome }) {

@@ -459,3 +459,8 @@ body.file-dragging .files-drop { border-color: var(--accent); background: var(--
   .term-bar { position: relative; z-index: 31; }
   .sidebar { top: var(--term-header-height, 44px); }
 }
+
+.engine-label { flex: 0 0 auto; font-size: 10px; line-height: 1.4; padding: 0 4px; border: 1px solid var(--line); border-radius: 3px; color: var(--dim); }
+.term-title:has(.engine-label) { min-width: 84px; }
+.term-bar:has(.engine-label) .usage-wrap { flex-shrink: 1; }
+.term-bar:has(.engine-label) .usage { max-width: 100%; overflow: hidden; }

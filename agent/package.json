@@ -14,6 +14,8 @@
     "test:status-reliable": "node test/status-reliable.mjs",
     "test:service-template": "node test/service-template.mjs",
     "test:session-lifecycle": "node test/session-lifecycle.mjs",
+    "test:pane-launcher": "node test/pane-launcher.mjs",
+    "test:engine-switch": "node test/engine-switch.mjs",
     "test:integration": "node test/integration.mjs"
   },
   "dependencies": {

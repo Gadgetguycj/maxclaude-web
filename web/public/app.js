@@ -380,7 +380,7 @@ function renderViews() {
   }
   const shown = S.active ? M.hostName(S, S.active) : null;
   const state = shown ? liveState(shown) : null;
-  renderInto(html`<${TermTitle} name=${shown} state=${state} stateText=${state ? (M.STATE_TEXT[state] || state) : ''} />`, $('#term-title'));
+  renderInto(html`<${TermTitle} name=${shown} engine=${M.sessionByName(S, shown)?.engine} state=${state} stateText=${state ? (M.STATE_TEXT[state] || state) : ''} />`, $('#term-title'));
   renderInto(html`<${UsageMeters} usage=${S.usage} now=${S.now} open=${S.usageOpen} onToggle=${toggleUsage} />`, $('#usage'));
 }
 
@@ -1656,6 +1656,20 @@ function menuFolder(anchor, n) {
   ]);
 }
 
+function engineMenuItem(name, ro) {
+  const session = M.sessionByName(S, name);
+  if (!session || session.exited || session.sleeping) return null;
+  const engine = session.engine === 'codex' ? 'claude' : 'codex';
+  return { label: engine === 'codex' ? 'Switch to Codex' : 'Switch to Claude', disabled: ro,
+    run: async function () {
+      try {
+        await api('POST', '/api/sessions/engine', { name, engine });
+        await refreshState(true);
+      } catch (error) { toast(errText(error), true); }
+    }
+  };
+}
+
 function menuLeaf(anchor, n) {
   if (!n) return;
   const ro = !canMutate();
@@ -1665,8 +1679,9 @@ function menuLeaf(anchor, n) {
     { label: 'Open terminal', run: function () { openSession(name); } },
     st === 'idle' ? { label: 'Hibernate', disabled: ro, run: function () { dlgHibernateOne(name); } } : null,
     st === 'missing' ? { label: 'Create session', disabled: ro, run: function () { dlgRecreate(n); } } : null,
-    st === 'idle' ? { label: 'Rename session', disabled: ro, run: function () { dlgRenameSession(name); } } : null,
+    (st === 'idle' || M.sessionByName(S, name)?.engine === 'codex') ? { label: 'Rename session', disabled: ro, run: function () { dlgRenameSession(name); } } : null,
     { label: 'Move to folder', disabled: ro, run: function () { dlgMove(n); } },
+    engineMenuItem(name, ro),
     { label: 'Delete session', danger: true, disabled: ro, run: function () { dlgDeleteLeaf(n); } }
   ]);
 }
@@ -1677,8 +1692,9 @@ function menuUnfiled(anchor, name) {
   openMenu(anchor, name, [
     { label: 'Open terminal', run: function () { openSession(name); } },
     st === 'idle' ? { label: 'Hibernate', disabled: ro, run: function () { dlgHibernateOne(name); } } : null,
-    st === 'idle' ? { label: 'Rename session', disabled: ro, run: function () { dlgRenameSession(name); } } : null,
+    (st === 'idle' || M.sessionByName(S, name)?.engine === 'codex') ? { label: 'Rename session', disabled: ro, run: function () { dlgRenameSession(name); } } : null,
     { label: 'File into folder', disabled: ro, run: function () { dlgAdopt(name); } },
+    engineMenuItem(name, ro),
     { label: 'Delete session', danger: true, disabled: ro, run: function () { dlgDeleteUnfiled(name); } }
   ]);
 }

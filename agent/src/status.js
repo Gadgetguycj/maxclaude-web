@@ -358,6 +358,7 @@ export function processDescendsFrom(pid, roots, procRoot = '/proc') {
 
 async function readProcessSnapshot(procRoot = '/proc', controllerSessions = null) {
   const claudePanes = new Map();
+  const codexPanes = new Map();
   const backgroundPanes = new Map();
   // Asking readdir for Dirent metadata makes Node lstat every DT_UNKNOWN
   // procfs entry. A PID can exit between getdents and that lstat, turning a
@@ -373,17 +374,19 @@ async function readProcessSnapshot(procRoot = '/proc', controllerSessions = null
     if (processIsZombie(proc, readStatus)) continue;
     const command = readNulFile(path.join(proc, 'cmdline'));
     if (!command[0]) continue;
+    const codex = path.basename(command[0]) === 'codex';
     const claude = isClaudeCommand(command);
+    const engine = codex || claude;
     // A live Claude process with an unreadable identity invalidates the whole
     // inventory. It must not become an absence claim.
-    const env = claude ? readNulFile(path.join(proc, 'environ')) : null;
+    const env = engine ? readNulFile(path.join(proc, 'environ')) : null;
     const startTicks = processStartTicks(proc);
     if (!startTicks) continue;
     const startedAt = claude ? processStartedAt(procRoot, startTicks, bootSeconds) : 0;
     const pid = Number(name);
     processes.push({ pid, startTicks, startedAt, command });
-    if (claude) {
-      claudes.push({ pid, proc, startTicks, startedAt, command, env, pane: envValue(env, 'ZELLIJ_PANE_ID'),
+    if (engine) {
+      claudes.push({ codex, pid, proc, startTicks, startedAt, command, env, pane: envValue(env, 'ZELLIJ_PANE_ID'),
         ttyNr: processTerminal(proc), controller: controllerForProcess(pid, procRoot, readStatus) });
     }
   }
@@ -402,17 +405,18 @@ async function readProcessSnapshot(procRoot = '/proc', controllerSessions = null
     if (unknown) unknownSessions.add(row.session);
     if (unknown || row.stale) incompleteSessions.add(row.session);
   }
-  for (const { pid, proc, startTicks, startedAt, command, env, pane, controller } of claudes) {
+  for (const { codex, pid, proc, startTicks, startedAt, command, env, pane, controller } of claudes) {
     const observed = controller && controllers.get(`${controller.pid}\0${controller.startTicks}`);
     if (!observed || !pane || !observed.panes.has(pane)
       || processStartTicks(proc) !== startTicks) continue;
     const session = observed.session;
     const key = `${session}\0${pane}`;
-    const previous = claudePanes.get(key);
+    const enginePanes = codex ? codexPanes : claudePanes;
+    const previous = enginePanes.get(key);
     const started = previous?.startedAt && startedAt
       ? Math.min(previous.startedAt, startedAt)
       : (previous?.startedAt || startedAt);
-    claudePanes.set(key, {
+    enginePanes.set(key, {
       session,
       pane,
       hookSession: envValue(env, 'ZELLIJ_SESSION_NAME') || session,
@@ -462,7 +466,7 @@ async function readProcessSnapshot(procRoot = '/proc', controllerSessions = null
       });
     }
   }
-  return { claudePanes, backgroundPanes, observedBootTicks: processBootTicks(procRoot), processes, incompleteSessions, unknownSessions };
+  return { claudePanes, codexPanes, backgroundPanes, observedBootTicks: processBootTicks(procRoot), processes, incompleteSessions, unknownSessions };
 }
 
 export async function readSessionProcessSnapshot(procRoot = '/proc', controllerSessions = null) {

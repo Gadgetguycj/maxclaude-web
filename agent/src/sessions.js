@@ -5,6 +5,7 @@ import { run, runOrThrow, stripAnsi } from './exec.js';
 import { RpcError } from './errors.js';
 import { log } from './log.js';
 import { collectSessionActivity, hiddenSessionActivity, readLiveClaudePanes, readSessionProcessSnapshot } from './status.js';
+import { parseSessionEnv } from './engine-launcher.js';
 import { viewerCount } from './viewers.js';
 import { readWebSharing } from './zellijconfig.js';
 import { webStatus } from './zellijweb.js';
@@ -129,7 +130,8 @@ export async function listSessionsFast() {
     return {
       ...previous,
       ...session,
-      activity: previous?.activity || 'unknown',
+      engine: sessionEngine(session.name),
+      activity: sessionEngine(session.name) === 'codex' ? 'unknown' : previous?.activity || 'unknown',
       activityUpdatedAt: previous?.activityUpdatedAt || 0,
       lastResponseAt: previous?.lastResponseAt || 0,
       lastActivityAt: previous?.lastActivityAt || 0,
@@ -158,7 +160,8 @@ async function scanSessions() {
   const observedSequence = nextStatusSequence();
   const operatorClients = attachedOperatorSessions(sessions.map((session) => session.name), processSnapshot.processes);
   for (const session of sessions) {
-    session.activity = activity[session.name]?.state || 'absent';
+    session.engine = sessionEngine(session.name);
+    session.activity = session.engine === 'codex' ? 'unknown' : activity[session.name]?.state || 'absent';
     // A live session whose panes zellij did not list in time is unknown, never absent.
     if (session.activity === 'absent' && processSnapshot.unknownSessions?.has(session.name)) session.activity = 'unknown';
     session.activityUpdatedAt = activity[session.name]?.updatedAt || 0;
@@ -463,6 +466,7 @@ function sessionFiles(name) {
   return {
     env: path.join(config.maxclaudeCfg, 'sessions', `${name}.env`),
     panes: path.join(config.maxclaudeCfg, `${name}.panes`),
+    launchers: path.join(config.maxclaudeCfg, 'sessions', `${name}.launchers`),
   };
 }
 
@@ -490,12 +494,7 @@ function maxagentMetaFile(name) {
 
 function readEnvFile(file) {
   try {
-    const result = {};
-    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-      const index = line.indexOf('=');
-      if (index > 0) result[line.slice(0, index)] = line.slice(index + 1);
-    }
-    return result;
+    return parseSessionEnv(fs.readFileSync(file, 'utf8'));
   } catch {
     return null;
   }
@@ -797,6 +796,79 @@ async function createSessionLocked(params, name) {
   });
 }
 
+export function sessionEngine(name) {
+  return readEnvFile(sessionFiles(name).env)?.MAXCLAUDE_ENGINE === 'codex' ? 'codex' : 'claude';
+}
+
+export function engineEnvironment(values, { engine, cwd, claudeSid, transcript }) {
+  const next = { ...values, MAXCLAUDE_WORKDIR: cwd || values.MAXCLAUDE_WORKDIR || config.defaultWorkdir, MAXCLAUDE_ENGINE: engine };
+  if (claudeSid) next.MAXCLAUDE_RESUME_SID = claudeSid;
+  next.MAXCLAUDE_HANDOFF_PROMPT = `You are taking over from ${engine === 'codex' ? 'Claude Code' : 'Codex'}. The previous engine's transcript is ${JSON.stringify(transcript)}. Read only the end of that JSONL file to learn the current task. State the current task in two lines, including any marker word the user asked you to remember, then wait for the user. Do not continue the task or delegate work.`;
+  return next;
+}
+
+function launcherParent(pid, name) {
+  let current = pid;
+  for (let depth = 0; depth < 5; depth++) {
+    try {
+      const status = fs.readFileSync(`/proc/${current}/status`, 'utf8');
+      current = Number(status.match(/^PPid:\s+(\d+)/m)?.[1]);
+      if (!current) break;
+      const args = fs.readFileSync(`/proc/${current}/cmdline`, 'utf8').split('\0');
+      if (args.some((arg) => arg.endsWith('/maxclaude-pane'))
+        && fs.existsSync(path.join(sessionFiles(name).launchers, String(current)))) return current;
+    } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ESRCH') throw error; break; }
+  }
+  return null;
+}
+
+export async function setEngine(params = {}) {
+  const name = validateName(params.name);
+  const engine = params.engine;
+  if (!['claude', 'codex'].includes(engine)) throw new RpcError('bad_request', 'engine must be claude or codex');
+  return withSessionLocks([name], async () => {
+    const file = sessionFiles(name).env;
+    const values = readEnvFile(file) || {};
+    const before = values.MAXCLAUDE_ENGINE || 'claude';
+    if (before === engine) return { name, engine, changed: false };
+    const snapshot = await readSessionProcessSnapshot();
+    const panes = [...(before === 'codex' ? snapshot.codexPanes || new Map() : snapshot.claudePanes).values()].filter((pane) => pane.session === name);
+    if (panes.length !== 1 || panes[0].pids.length !== 1) throw new RpcError('conflict', 'Switching engines requires exactly one running engine pane');
+    const pane = panes[0];
+    const launcher = launcherParent(pane.pids[0], name);
+    let transcript;
+    let claudeSid;
+    if (before === 'claude') {
+      const ids = [...liveConversationIds(name, snapshot.claudePanes)];
+      if (ids.length !== 1) throw new RpcError('conflict', 'The current Claude conversation is not known yet');
+      claudeSid = ids[0];
+      transcript = path.join(config.projectsDir, pane.cwd.replaceAll('/', '-'), `${claudeSid}.jsonl`);
+    } else {
+      const codex = values.MAXCLAUDE_CODEX_SID && values.MAXCLAUDE_CODEX_TRANSCRIPT ? { id: values.MAXCLAUDE_CODEX_SID, file: values.MAXCLAUDE_CODEX_TRANSCRIPT } : null;
+      if (!codex) throw new RpcError('conflict', 'The current Codex conversation is not known yet');
+      transcript = codex.file;
+      if (!values.MAXCLAUDE_RESUME_SID) throw new RpcError('conflict', 'The original Claude conversation is missing');
+    }
+    if (!fs.existsSync(transcript)) throw new RpcError('conflict', 'The handoff transcript is missing');
+    const next = engineEnvironment(readEnvFile(file) || values, { engine, cwd: pane.cwd, claudeSid, transcript });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    writeMetadata(file, next);
+    try {
+      if (launcher) process.kill(launcher, 'SIGUSR1');
+      else {
+        const unit = sessionUnitName(await systemdEscape(name));
+        await runOrThrow('systemctl', ['--user', 'restart', unit], { timeout: 60000 });
+      }
+    } catch (error) {
+      if (Object.keys(values).length) writeMetadata(file, values);
+      else fs.rmSync(file, { force: true });
+      throw error;
+    }
+    lastDetailedSessions.delete(name);
+    return { name, engine, changed: true };
+  });
+}
+
 export async function renameSession(params = {}) {
   const oldName = validateName(params.oldName);
   const newName = validateName(params.newName);
@@ -825,7 +897,7 @@ async function renameSessionLocked(oldName, newName) {
     }
   }
 
-  const paneIds = await terminalPaneIds(oldName);
+  const paneIds = sessionEngine(oldName) === 'codex' ? [] : await terminalPaneIds(oldName);
   const claudeReports = [];
   const renamedPanes = [];
   try {
@@ -843,6 +915,7 @@ async function renameSessionLocked(oldName, newName) {
   let zellijRenamed = false;
   let envMoved = false;
   let panesMoved = false;
+  let launchersMoved = false;
   let units = null;
   try {
     await runOrThrow(config.zellijBin, [
@@ -852,6 +925,7 @@ async function renameSessionLocked(oldName, newName) {
 
     envMoved = moveExistingFile(oldFiles.env, newFiles.env);
     panesMoved = moveExistingFile(oldFiles.panes, newFiles.panes);
+    launchersMoved = moveExistingFile(oldFiles.launchers, newFiles.launchers);
     units = await setUnitMapping(oldName, newName);
 
     const current = (await listSessions({ fresh: true })).sessions;
@@ -888,6 +962,9 @@ async function renameSessionLocked(oldName, newName) {
     if (envMoved && fs.existsSync(newFiles.env) && !fs.existsSync(oldFiles.env)) {
       try { fs.renameSync(newFiles.env, oldFiles.env); } catch { /* report the original error */ }
     }
+    if (launchersMoved && fs.existsSync(newFiles.launchers) && !fs.existsSync(oldFiles.launchers)) {
+      try { fs.renameSync(newFiles.launchers, oldFiles.launchers); } catch { /* report the original failure */ }
+    }
     if (panesMoved && fs.existsSync(newFiles.panes) && !fs.existsSync(oldFiles.panes)) {
       try { fs.renameSync(newFiles.panes, oldFiles.panes); } catch { /* report the original error */ }
     }
@@ -918,6 +995,7 @@ async function deleteSessionLocked(name) {
     if (!(await isListed(name))) {
       const files = sessionFiles(name);
       const removed = [];
+      fs.rmSync(files.launchers, { recursive: true, force: true });
       for (const file of [files.env, files.panes]) {
         try {
           fs.unlinkSync(file);

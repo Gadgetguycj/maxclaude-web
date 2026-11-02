@@ -29,6 +29,30 @@ Put an HTTPS reverse proxy in front of the hub and pass WebSocket upgrades. Rout
 
 Sign in with the operator password. The session tree lists agent sessions. Open a named session to attach to its terminal.
 
+## Switch session engines
+
+Install both Claude Code and Codex on the session machine and sign in to each.
+The agent installer also installs the self-contained `maxclaude-pane` launcher in
+`~/.local/bin`. The maxclaude session layouts must use that launcher.
+
+Open a running session's menu and choose **Switch to Codex** or **Switch to Claude**.
+Switching requires exactly one running engine pane and an existing conversation
+transcript. The selected engine reads the end of the previous transcript and waits
+for your next instruction. Returning to an engine resumes its saved conversation.
+Codex sessions show a Codex label and a neutral activity indicator.
+
+The launcher waits for the previous engine to exit before starting the next engine.
+A session using an older launcher saves its conversation and selected engine before
+restarting its session service. Install the new launcher before switching an older
+session. Session metadata and launcher ownership follow a session rename.
+
+The launcher uses the session's working directory, then `MCW_DEFAULT_WORKDIR`,
+then `~/projects` or the home directory if that directory does not exist.
+Codex's SessionStart hook records its conversation and transcript in the session
+metadata. That invocation explicitly trusts configured hooks. Both engines run
+with their permission prompts bypassed, so use only trusted working directories
+and hooks.
+
 ## Environment
 
 | Variable | Component | Purpose | Default |

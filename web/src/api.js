@@ -627,6 +627,14 @@ export function createApi(tunnel) {
     }
   });
 
+  router.post('/sessions/engine', async (req, res) => {
+    try {
+      const name = cleanSessionName(req.body?.name);
+      const result = await tunnel.rpc('sessions.setEngine', { name, engine: req.body?.engine });
+      return res.json(result);
+    } catch (err) { return fail(res, err); }
+  });
+
   router.post('/sessions/rename', async (req, res) => {
     try {
       const oldName = cleanSessionName(req.body?.old_name);

@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# Self-contained so the installed copy needs no checkout-relative imports.
+set -euo pipefail
+
+if [[ ${1:-} == --record-codex ]]; then
+  exec node -e '
+    const fs = require("node:fs"), path = require("node:path");
+    const [directory, pid] = process.argv.slice(1);
+    const event = JSON.parse(fs.readFileSync(0, "utf8"));
+    if (!/^[0-9a-f-]{36}$/i.test(event.session_id || "") || !path.isAbsolute(event.transcript_path || "")) throw Error("Codex did not supply a session id and transcript path");
+    const matches = fs.readdirSync(directory).filter(n => n.endsWith(".launchers") && fs.existsSync(path.join(directory, n, pid)));
+    if (matches.length !== 1) throw Error("Cannot identify the owning maxclaude session");
+    const file = path.join(directory, matches[0].slice(0, -10) + ".env");
+    const text = fs.readFileSync(file, "utf8");
+    if (!text.split("\n").includes("MAXCLAUDE_ENGINE=codex")) throw Error("The owning session is not using Codex");
+    const lines = text.split("\n").filter(l => l && !/^MAXCLAUDE_CODEX_(SID|TRANSCRIPT)=/.test(l));
+    lines.push("MAXCLAUDE_CODEX_SID=" + event.session_id, "MAXCLAUDE_CODEX_TRANSCRIPT=" + event.transcript_path);
+    const temp = file + "." + process.pid + ".tmp";
+    fs.writeFileSync(temp, lines.join("\n") + "\n", {mode: 0o600});
+    fs.renameSync(temp, file);
+  ' "${2:?session directory required}" "${3:?launcher pid required}"
+fi
+
+launcher=$(readlink -f -- "$0")
+cfg="${MAXROUTER_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/maxclaude}"
+sess="${ZELLIJ_SESSION_NAME:-}"
+child='' timer='' switching=0 stopping=0
+original_org=${MAXCLAUDE_ORG-}
+default_workdir=${MCW_DEFAULT_WORKDIR:-$HOME/projects}
+[[ -d $default_workdir ]] || default_workdir=$HOME
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
+unset CLAUDECODE CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID \
+      CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH CLAUDE_EFFORT
+export IS_SANDBOX=1
+
+locate_session() {
+  local candidate
+  # The ownership directory moves with the session, even if the old name is reused.
+  for candidate in "$cfg/sessions/"*.launchers/"$$"; do
+    [[ -f $candidate ]] || continue
+    sess=${candidate%/$$}; sess=${sess##*/}; sess=${sess%.launchers}
+    break
+  done
+  envfile="$cfg/sessions/$sess.env"
+}
+stop_child() {
+  if [[ $1 == switch ]]; then switching=1; else stopping=1; fi
+  if [[ -n $child ]]; then
+    kill -TERM "$child" 2>/dev/null || true
+    if [[ -z $timer ]]; then
+      ( trap - USR1 INT HUP
+        sleep 10 & sleeper=$!
+        trap 'kill "$sleeper" 2>/dev/null || true; wait "$sleeper" 2>/dev/null || true; exit' TERM
+        wait "$sleeper"
+        kill -KILL "$child" 2>/dev/null || true
+      ) &
+      timer=$!
+    fi
+  fi
+}
+cleanup() {
+  if [[ -n $timer ]]; then kill "$timer" 2>/dev/null || true; wait "$timer" 2>/dev/null || true; fi
+  locate_session
+  if [[ -n $sess ]]; then
+    rm -f -- "$cfg/sessions/$sess.launchers/$$"
+    rmdir -- "$cfg/sessions/$sess.launchers" 2>/dev/null || true
+  fi
+}
+trap 'stop_child switch' USR1
+trap 'stop_child stop' TERM INT HUP
+trap cleanup EXIT
+if [[ -n $sess ]]; then
+  mkdir -p -- "$cfg/sessions/$sess.launchers"
+  (umask 077; : > "$cfg/sessions/$sess.launchers/$$")
+fi
+
+while (( ! stopping )); do
+  switching=0
+  locate_session
+  workdir=$default_workdir org=$original_org resume_sid='' settings='' append_prompt='' extra_args=''
+  engine=claude codex_sid='' prompt=''
+  if [[ -n $sess && -f $envfile ]]; then
+    while IFS= read -r line || [[ -n $line ]]; do
+      case "$line" in
+        MAXCLAUDE_WORKDIR=*) workdir=${line#*=} ;;
+        MAXCLAUDE_ORG=*) org=${line#*=} ;;
+        MAXCLAUDE_RESUME_SID=*) resume_sid=${line#*=} ;;
+        MAXCLAUDE_SETTINGS=*) settings=${line#*=} ;;
+        MAXCLAUDE_APPEND_PROMPT=*) append_prompt=${line#*=} ;;
+        MAXCLAUDE_EXTRA_ARGS=*) extra_args=${line#*=} ;;
+        MAXCLAUDE_ENGINE=*) engine=${line#*=} ;;
+        MAXCLAUDE_CODEX_SID=*) codex_sid=${line#*=} ;;
+        MAXCLAUDE_HANDOFF_PROMPT=*) prompt=${line#*=} ;;
+      esac
+    done < "$envfile"
+  fi
+  [[ -d $workdir ]] || workdir=$default_workdir
+  cd -- "$workdir"
+  if [[ -n $org ]]; then export MAXCLAUDE_ORG=$org;
+  elif [[ -n $original_org ]]; then export MAXCLAUDE_ORG=$original_org;
+  else unset MAXCLAUDE_ORG; fi
+  case "$engine" in
+    claude|'')
+      command=claude
+      args=(--dangerously-skip-permissions)
+      [[ -z $sess ]] || args+=("--remote-control=$sess")
+      [[ -z $resume_sid ]] || args+=(--resume "$resume_sid")
+      [[ -z $settings ]] || args+=(--settings "$settings")
+      [[ -z $append_prompt ]] || args+=(--append-system-prompt "$append_prompt")
+      if [[ -n $extra_args ]]; then read -r -a extra <<< "$extra_args"; args+=("${extra[@]}"); fi
+      for ((i=0; i<60; i++)); do
+        command -v claude >/dev/null && break
+        (( stopping || switching )) && break
+        sleep 1
+      done
+      ;;
+    codex)
+      command=codex
+      args=()
+      [[ -z $codex_sid ]] || args+=(resume "$codex_sid")
+      args+=(--dangerously-bypass-approvals-and-sandbox --cd "$workdir")
+      if [[ -n $sess ]]; then
+        # JSON double quotes contain a shell-quoted command in the TOML override.
+        printf -v hook '%q --record-codex %q %q' "$launcher" "$cfg/sessions" "$$"
+        hook=${hook//\\/\\\\}; hook=${hook//\"/\\\"}
+        args+=(-c "hooks.SessionStart=[{ hooks = [{ type = \"command\", command = \"$hook\" }] }]" --dangerously-bypass-hook-trust)
+      fi
+      ;;
+    *) echo 'Unknown MAXCLAUDE_ENGINE' >&2; exit 1 ;;
+  esac
+  (( stopping )) && break
+  (( switching )) && continue
+  if [[ -n $prompt ]]; then
+    args+=("$prompt")
+    # Do not create an env file for a classic session. Consume only a saved handoff.
+    (umask 077; sed '/^MAXCLAUDE_HANDOFF_PROMPT=/d' "$envfile" > "$envfile.$$.tmp")
+    mv -- "$envfile.$$.tmp" "$envfile"
+  fi
+  # Explicit stdin keeps the background engine attached to the pane terminal.
+  "$command" "${args[@]}" <&0 &
+  child=$!
+  if (( stopping )); then stop_child stop; elif (( switching )); then stop_child switch; fi
+  status=0
+  # A trapped signal interrupts wait before exit. Reap the engine before switching.
+  while :; do
+    wait "$child" && status=0 || status=$?
+    kill -0 "$child" 2>/dev/null || break
+  done
+  child=''
+  if [[ -n $timer ]]; then kill "$timer" 2>/dev/null || true; wait "$timer" 2>/dev/null || true; timer=''; fi
+  (( stopping || ! switching )) && exit "$status"
+done

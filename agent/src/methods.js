@@ -2,7 +2,7 @@ import os from 'node:os';
 import { config, webOrigin } from './config.js';
 import { run } from './exec.js';
 import { RpcError } from './errors.js';
-import { listSessions, listSessionsFast, createSession, deleteSession, renameSession, hibernateSession, hibernateCandidates, wakeSession, reserveSessionViewer, releaseSessionViewer } from './sessions.js';
+import { listSessions, listSessionsFast, setEngine, createSession, deleteSession, renameSession, hibernateSession, hibernateCandidates, wakeSession, reserveSessionViewer, releaseSessionViewer } from './sessions.js';
 import { listTranscripts } from './transcripts.js';
 import { webStatus, tokenName } from './zellijweb.js';
 import { readWebSharing } from './zellijconfig.js';
@@ -29,6 +29,7 @@ const table = {
   'sessions.list': () => listSessions(),
   'sessions.listFast': () => listSessionsFast(),
   'sessions.create': (params) => createSession(params || {}),
+  'sessions.setEngine': (params) => setEngine(params || {}),
   'sessions.rename': (params) => renameSession(params || {}),
   'sessions.delete': (params) => deleteSession(params || {}),
   'sessions.hibernateCandidates': (params) => hibernateCandidates(params || {}),
